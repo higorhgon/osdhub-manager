@@ -646,7 +646,10 @@ mod tests {
         let lines = plan.describe(&root);
         assert_eq!(
             lines[0],
-            (folder.join("BOOT/BOOT.ELF").display().to_string(), false)
+            (
+                folder.join("BOOT").join("BOOT.ELF").display().to_string(),
+                false
+            )
         );
         let log = plan.apply(&root).unwrap();
         assert!(log[0].contains("copy its BOOT and SYS-CONF folders"));
