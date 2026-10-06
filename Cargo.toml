@@ -10,7 +10,10 @@ crossterm = "0.29"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 ratatui = "0.30.2"
 ratatui-image = { version = "11.1.0", default-features = false, features = ["crossterm"] }
+serde_json = "1.0.151"
+sevenz-rust2 = { version = "0.23.0", default-features = false, features = ["util"] }
 ureq = "3"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
 # Small static binaries for the releases
 [profile.release]

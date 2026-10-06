@@ -8,6 +8,8 @@ mod config_tab;
 mod covers;
 mod disc;
 mod games;
+mod install;
+mod install_modal;
 mod memcard;
 mod osdhub;
 mod rename;
@@ -33,6 +35,8 @@ COMMANDS:
     list      Lists the games with the title IDs read from their discs
     covers    Downloads the case covers and discs of the games into ART/ (<ID>_COV.jpg, <ID>_ICO.png...)
     rename    Renames the PS2 ISOs to OPL's <ID>.<name>.iso form (only shows the changes without --apply)
+    install   Installs OSDHub as mc0:/BOOT/BOOT.ELF in the device's BOOT memory card, and RiptOPL, Neutrino and
+              Ember on the device, from their latest releases, after showing what's written and asking
     config    Shows OSDMenu's configuration (SYS-CONF/OSDMENU.CNF inside the device's BOOT memory card, or the
               memory card image or .cnf file given instead of the device root), exports it or imports it
 
@@ -52,7 +56,12 @@ OPTIONS:
     --no-covers         OSDHub doesn't show covers (games_covers = 0), which leaves more room for the names
     --export <FILE>     Writes the configuration to FILE, to edit it (config)
     --import <FILE>     Saves FILE as the configuration, after showing the changes and asking (config)
-    --yes               Doesn't ask before saving (config --import)
+    --yes               Doesn't ask before saving (config --import, install)
+    --opl / --opl-ra    Installs RiptOPL / its RetroAchievements build (install)
+    --neutrino          Installs Neutrino (install)
+    --ember             Installs Ember, a beta by Gageformer (install)
+    --bios <FILE>       PS1 BIOS dumped from your console, copied to EMBER/bios.bin (install)
+    --card <FILE>       Memory card image to install OSDHub in (install; default: the only BOOT one)
     -h, --help          Shows this help
     -V, --version       Shows the version
 
@@ -82,6 +91,8 @@ struct Options {
     export: Option<PathBuf>,
     import: Option<PathBuf>,
     yes: bool,
+    install: install::Choice,
+    card: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Options, String> {
@@ -110,6 +121,8 @@ fn parse_args() -> Result<Options, String> {
         export: None,
         import: None,
         yes: false,
+        install: install::Choice::default(),
+        card: None,
     };
 
     while let Some(arg) = args.next() {
@@ -132,6 +145,18 @@ fn parse_args() -> Result<Options, String> {
             "--no-images" => options.images = false,
             "--no-covers" => options.screen.covers = false,
             "--yes" | "-y" => options.yes = true,
+            "--opl" => options.install.opl = true,
+            "--opl-ra" => {
+                options.install.opl = true;
+                options.install.opl_ra = true;
+            }
+            "--neutrino" => options.install.neutrino = true,
+            "--ember" => options.install.ember = true,
+            "--bios" => {
+                options.install.ember = true;
+                options.install.bios = Some(PathBuf::from(value("--bios")?));
+            }
+            "--card" => options.card = Some(PathBuf::from(value("--card")?)),
             "--export" => options.export = Some(PathBuf::from(value("--export")?)),
             "--import" => options.import = Some(PathBuf::from(value("--import")?)),
             "--menu-x" => {
@@ -168,7 +193,7 @@ fn parse_args() -> Result<Options, String> {
         }
     }
 
-    const COMMANDS: [&str; 5] = ["tui", "list", "covers", "rename", "config"];
+    const COMMANDS: [&str; 6] = ["tui", "list", "covers", "rename", "config", "install"];
     let (command, root) = match positional.as_slice() {
         [] => ("tui", None),
         [command] if COMMANDS.contains(&command.as_str()) && !Path::new(command).is_dir() => {
@@ -468,6 +493,69 @@ fn show_config(options: &Options) -> ExitCode {
     }
 }
 
+fn install_apps(options: &Options) -> ExitCode {
+    let root = device_root(options);
+    let card = match &options.card {
+        Some(card) => Ok(card.clone()),
+        None => install_modal::card_for(None, &config::find_cards(root)),
+    };
+    let card = match card {
+        Ok(card) => card,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let plan = match install::prepare(root, &card, &options.install, &|line| println!("{line}")) {
+        Ok(plan) => plan,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!();
+    for source in &plan.sources {
+        println!("{source}");
+    }
+    println!("Files:");
+    for (file, replaces) in plan.describe(root) {
+        println!("  {file}{}", if replaces { "   (replaces it)" } else { "" });
+    }
+    if plan.creates_cnf {
+        println!(
+            "The memory card has no OSDMENU.CNF: it gets the example (edit it with the config command)"
+        );
+    }
+    for note in &plan.notes {
+        println!("warning: {note}");
+    }
+    if !options.yes {
+        print!(
+            "Install? A copy of {} is made first. [y/N] ",
+            card.display()
+        );
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        let mut answer = String::new();
+        let _ = std::io::stdin().read_line(&mut answer);
+        if !matches!(answer.trim(), "y" | "Y" | "yes") {
+            println!("Not installed.");
+            return ExitCode::SUCCESS;
+        }
+    }
+    match plan.apply(root) {
+        Ok(log) => {
+            for line in log {
+                println!("{line}");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let options = match parse_args() {
         Ok(options) => options,
@@ -501,6 +589,7 @@ fn main() -> ExitCode {
         "covers" => download_covers(&options),
         "rename" => rename_isos(&options),
         "config" => show_config(&options),
+        "install" => install_apps(&options),
         other => {
             eprintln!("error: unknown command: {other}\n\n{USAGE}");
             ExitCode::from(2)

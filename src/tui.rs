@@ -316,6 +316,7 @@ impl App {
     }
 
     fn receive(&mut self) {
+        self.config.poll();
         let Some(rx) = &self.downloads else { return };
         let messages: Vec<Message> = rx.try_iter().collect();
         for message in messages {

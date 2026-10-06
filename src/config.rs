@@ -124,6 +124,46 @@ pub fn save(source: &Source, original: &str, new: &str) -> Result<PathBuf, Strin
             path.display()
         ));
     }
+    match source {
+        Source::Card(path) => write_card(path, &[(CNF_PATH, new.as_bytes())]),
+        Source::File(path) => replace_checked(path, new.as_bytes(), |written| {
+            if written == new.as_bytes() {
+                Ok(())
+            } else {
+                Err("the configuration read back is different".to_string())
+            }
+        }),
+    }
+}
+
+/// Writes files into a memory card image (creating them and their directories when needed), returning the copy
+/// of the image made first. Nothing is changed when they don't fit
+pub fn write_card(path: &Path, files: &[(&str, &[u8])]) -> Result<PathBuf, String> {
+    let image = fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut card = Card::open(&image)?;
+    for (file, contents) in files {
+        card.write_file(file, contents)
+            .map_err(|e| format!("{file}: {e}"))?;
+    }
+    replace_checked(path, &card.to_bytes(), |written| {
+        let card = Card::open(written)?;
+        card.check()?;
+        for (file, contents) in files {
+            if card.read(file)? != *contents {
+                return Err(format!("{file} read back is different"));
+            }
+        }
+        Ok(())
+    })
+}
+
+/// Replaces a file with `contents`: copies it to `<name>.bak-<UTC date>-<time>` first, writes the new one next to
+/// it and moves it over, then reads it back and `check`s it, putting the copy back when that fails
+fn replace_checked(
+    path: &Path,
+    contents: &[u8],
+    check: impl Fn(&[u8]) -> Result<(), String>,
+) -> Result<PathBuf, String> {
     let (year, month, day, hours, minutes, seconds) = memcard::date_time(0);
     let stamp = format!("{year}{month:02}{day:02}-{hours:02}{minutes:02}{seconds:02}");
     let backup = (1..)
@@ -139,15 +179,6 @@ pub fn save(source: &Source, original: &str, new: &str) -> Result<PathBuf, Strin
         .unwrap();
     fs::copy(path, &backup).map_err(|e| format!("copying {} first: {e}", path.display()))?;
 
-    let contents = match source {
-        Source::Card(_) => {
-            let image = fs::read(path).map_err(|e| e.to_string())?;
-            let mut card = Card::open(&image)?;
-            card.write_file(CNF_PATH, new.as_bytes())?;
-            card.to_bytes()
-        }
-        Source::File(_) => new.as_bytes().to_vec(),
-    };
     let mut temporary = path.as_os_str().to_owned();
     temporary.push(".osdhub-new");
     let temporary = PathBuf::from(temporary);
@@ -155,7 +186,7 @@ pub fn save(source: &Source, original: &str, new: &str) -> Result<PathBuf, Strin
     // Windows doesn't flush a file opened only for reading)
     let written = fs::File::create(&temporary)
         .and_then(|mut file| {
-            file.write_all(&contents)?;
+            file.write_all(contents)?;
             file.sync_all()
         })
         .and_then(|_| fs::rename(&temporary, path));
@@ -167,22 +198,12 @@ pub fn save(source: &Source, original: &str, new: &str) -> Result<PathBuf, Strin
         ));
     }
 
-    // Read back: the whole memory card must be readable and have the new configuration
-    let verified = match source {
-        Source::Card(_) => fs::read(path).map_err(|e| e.to_string()).and_then(|image| {
-            let card = Card::open(&image)?;
-            card.check()?;
-            card.read(CNF_PATH)
-        }),
-        Source::File(_) => fs::read(path).map_err(|e| e.to_string()),
-    };
+    let verified = fs::read(path)
+        .map_err(|e| e.to_string())
+        .and_then(|written| check(&written));
     match verified {
-        Ok(bytes) if bytes == new.as_bytes() => Ok(backup),
-        result => {
-            let why = match result {
-                Err(e) => e,
-                Ok(_) => "the configuration read back is different".to_string(),
-            };
+        Ok(()) => Ok(backup),
+        Err(why) => {
             let restored = fs::copy(&backup, path)
                 .map(|_| ())
                 .map_err(|e| e.to_string());

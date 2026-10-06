@@ -8,6 +8,8 @@ device, a USB drive...), so OPL Manager (Windows only) isn't needed, from a term
   (`ART/SLUS_202.12_COV.jpg`), for OSDHub's game covers (`games_covers = 1`) and OPL
 - **rename** — renames the PS2 ISOs to OPL's `<title ID>.<name>.iso` form (`SLUS_202.12.BLOODY ROAR 3.iso`),
   which OPL needs to find the game's art, configuration and cheats
+- **install** — installs OSDHub in the memory card image an MMCE device boots from, and RiptOPL, Neutrino and Ember
+  on the device, from their latest releases
 - **config** — edits OSDMenu's configuration, `SYS-CONF/OSDMENU.CNF`, right inside the memory card image an MMCE
   device boots from, or in a `.cnf` file
 
@@ -125,6 +127,7 @@ is reported.
 | `u` | Undoes the changes not saved |
 | `x` / `i` | Exports the configuration to a file to edit it elsewhere / imports it back (then `s` shows the changes and saves them) |
 | `o` | Opens another memory card or file |
+| `I` | Installs OSDHub and the programs it launches (below) |
 
 The rest of the file is kept as it is: comments, the order of the lines, the menu entries and the settings it doesn't
 know. A setting is changed in its line, or in place of its commented-out line (`# games_covers = 0`), or added at the end.
@@ -139,6 +142,28 @@ know. A setting is changed in its line, or in place of its commented-out line (`
 The memory card images of MMCE devices are 8 MB images without ECC; the 8.25 MB images with ECC, like PCSX2's, are
 supported too, with the ECC of the pages written computed again. Edit the memory card with the SD card in a card reader,
 not while the PS2 is using it. Delete the `.bak-*` copies once the new configuration works.
+
+## Installing
+
+`I` in the Config tab (or the `install` command) installs OSDHub and, optionally, the programs it launches, from their
+latest releases on GitHub:
+
+| | Where | From |
+| --- | --- | --- |
+| **OSDHub** (always) | `mc0:/BOOT/BOOT.ELF` in the BOOT memory card image, the ELF the boot loader starts | [higorhgon/osdmenu](https://github.com/higorhgon/osdmenu/releases)'s `osdmenu-*.zip` |
+| **RiptOPL** | `APPS/OPL/RIPTOPL.ELF` | [higorhgon/Open-PS2-Loader](https://github.com/higorhgon/Open-PS2-Loader/releases)'s manual releases, with the MMCE/SMB argv autolaunch OSDHub uses (`games_launcher = opl`): the OFFICIALPINNED build, or PS2DEVPINNED-RA, the RetroAchievements one |
+| **Neutrino** | `APPS/neutrino/` | [rickgaiser/neutrino](https://github.com/rickgaiser/neutrino/releases)'s latest release (`.7z`) |
+| **Ember** | `EMBER/`, with `EMBER/games/` | [Ember](https://github.com/Gageformer/Ember/releases), a PS1 emulator by **Gageformer**, under its beta licence (installed next to it) |
+
+Everything is downloaded first, then the files that will be written are listed (marking the ones they replace), and
+they're only written after confirming. The memory card is written like the configuration is saved: copied first and
+checked after. When it has no `OSDMENU.CNF`, it gets the example from OSDHub's release, which the Config tab opens.
+
+Ember needs a PS1 BIOS dumped from your own console, which isn't (and can't be) downloaded: give it in the installer
+(or with `--bios`) to copy it to `EMBER/bios.bin`. Ember's own `settings.txt` and games aren't touched.
+
+The paths in `OSDMENU.CNF` aren't changed: the example's are `mmce?:/APPS/neutrino/neutrino.elf` and
+`mmce?:/APPS/OPL/RIPTOPL.ELF`, where the installer puts them.
 
 ## Commands
 
@@ -162,6 +187,9 @@ osdhub-manager covers /run/media/$USER/MMCE --ps1 --types cov --dry-run
 osdhub-manager config /run/media/$USER/MMCE --export OSDMENU.CNF
 nvim OSDMENU.CNF
 osdhub-manager config /run/media/$USER/MMCE --import OSDMENU.CNF
+
+# Installs OSDHub, RiptOPL (RetroAchievements build), Neutrino and Ember, with the BIOS for Ember
+osdhub-manager install /run/media/$USER/MMCE --opl-ra --neutrino --bios ~/scph1001.bin
 
 # The configuration in a given memory card image
 osdhub-manager config /run/media/$USER/MMCE/MemoryCards/BOOT/BootCard.mcd
@@ -188,7 +216,10 @@ covers and picks up the new ISO paths.
 | `--menu-x N` | Center of OSDHub's menu (`OSDSYS_menu_x`, 400 by default), to find the names that don't fit |
 | `--no-covers` | OSDHub doesn't show covers (`games_covers = 0`), which leaves more room for the names |
 | `--export FILE` / `--import FILE` | Writes the configuration to a file / saves a file as the configuration, after showing the changes and asking (`config`) |
-| `--yes` | Doesn't ask before saving (`config --import`) |
+| `--yes` | Doesn't ask before saving (`config --import`, `install`) |
+| `--opl` / `--opl-ra` / `--neutrino` / `--ember` | What to install besides OSDHub (`install`); `--opl-ra` is RiptOPL's RetroAchievements build |
+| `--bios FILE` | PS1 BIOS for Ember, copied to `EMBER/bios.bin` (`install`) |
+| `--card FILE` | Memory card image to install OSDHub in (`install`; by default the only one in `MemoryCards/**/BOOT/`) |
 
 ## Games
 
@@ -223,7 +254,8 @@ Images already in `ART/` (as `.jpg` or `.png`) aren't downloaded again unless `-
 cargo build --release
 ```
 
-The dependencies are [ratatui](https://ratatui.rs), crossterm and [ratatui-image](https://github.com/ratatui/ratatui-image)
+The archives are read with [zip](https://github.com/zip-rs/zip2) and [sevenz-rust2](https://github.com/hasenbanck/sevenz-rust),
+and GitHub's answers with serde_json. The dependencies are [ratatui](https://ratatui.rs), crossterm and [ratatui-image](https://github.com/ratatui/ratatui-image)
 with [image](https://github.com/image-rs/image) (JPEG and PNG only) for the terminal interface, and
 [ureq](https://github.com/algesten/ureq) (HTTPS with rustls), pinned by `Cargo.lock`. The release
 binaries are built by GitHub Actions when a `v*` tag is pushed: a static Linux binary (musl), Windows and macOS.

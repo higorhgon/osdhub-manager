@@ -4,6 +4,7 @@
 
 use crate::cnf::{self, Cnf, KEYS, Key, Kind};
 use crate::config::{self, FoundCard, Source};
+use crate::install_modal::{self, InstallModal, Outcome};
 use crossterm::event::KeyCode;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout as Split, Rect};
@@ -62,6 +63,8 @@ pub struct ConfigTab {
     /// The changes to save, waiting for confirmation
     confirm: Option<Vec<(Option<String>, Option<String>)>>,
     error: Option<String>,
+    /// The installer, when open
+    install: Option<InstallModal>,
     /// Lines for the log of the interface
     pub log: Vec<String>,
 }
@@ -81,6 +84,7 @@ impl ConfigTab {
             input: None,
             confirm: None,
             error: None,
+            install: None,
             log: Vec::new(),
         }
     }
@@ -92,7 +96,7 @@ impl ConfigTab {
 
     /// Whether the keys are typed into the tab, so the interface's own keys don't apply
     pub fn typing(&self) -> bool {
-        self.input.is_some() || self.confirm.is_some()
+        self.input.is_some() || self.confirm.is_some() || self.install.is_some()
     }
 
     /// Finds the memory cards the first time the tab is shown, opening the one with the configuration
@@ -217,8 +221,44 @@ impl ConfigTab {
             .to_string()
     }
 
+    /// Takes the messages of the installer's download
+    pub fn poll(&mut self) {
+        if let Some(install) = &mut self.install {
+            install.poll();
+        }
+    }
+
+    /// Opens the installer for the memory card open, or the only BOOT memory card
+    fn start_install(&mut self) {
+        self.show();
+        let open = match &self.source {
+            Some(Source::Card(path)) => Some(path.as_path()),
+            _ => None,
+        };
+        match install_modal::card_for(open, self.cards.as_deref().unwrap_or_default()) {
+            Ok(card) => self.install = Some(InstallModal::new(self.root.clone(), card)),
+            Err(e) => self.error = Some(e),
+        }
+    }
+
     pub fn key(&mut self, code: KeyCode) {
         self.error = None;
+        if let Some(install) = &mut self.install {
+            match install.key(code) {
+                Outcome::Nothing => {}
+                Outcome::Closed => self.install = None,
+                Outcome::Installed { log, card } => {
+                    self.log.extend(log);
+                    self.install = None;
+                    // The memory card changed: read it again, with its OSDMENU.CNF (the example, when it had none)
+                    self.cards = Some(config::find_cards(&self.root));
+                    if !self.modified() {
+                        self.open(Source::Card(card));
+                    }
+                }
+            }
+            return;
+        }
         if self.input.is_some() {
             self.input_key(code);
             return;
@@ -282,12 +322,13 @@ impl ConfigTab {
                 self.start_input(Purpose::Import, &file);
             }
             KeyCode::Char('o') => self.picking = true,
+            KeyCode::Char('I') => self.start_install(),
             _ => {}
         }
     }
 
     fn pick_key(&mut self, code: KeyCode) {
-        let count = self.cards.as_ref().map_or(0, Vec::len) + 1;
+        let count = self.cards.as_ref().map_or(0, Vec::len) + 2;
         let current = self.pick.selected().unwrap_or(0);
         match code {
             KeyCode::Down | KeyCode::Char('j') => {
@@ -295,11 +336,13 @@ impl ConfigTab {
             }
             KeyCode::Up | KeyCode::Char('k') => self.pick.select(Some(current.saturating_sub(1))),
             KeyCode::Esc if self.source.is_some() => self.picking = false,
+            KeyCode::Char('I') => self.start_install(),
             KeyCode::Enter => match self.cards.as_ref().and_then(|c| c.get(current)) {
                 Some(card) => match &card.cnf {
                     Ok(_) => self.open(Source::Card(card.path.clone())),
                     Err(e) => self.error = Some(e.clone()),
                 },
+                None if current == count - 1 => self.start_install(),
                 None => {
                     let start = format!("{}{}", self.root.display(), std::path::MAIN_SEPARATOR);
                     self.start_input(Purpose::Open, &start);
@@ -486,12 +529,14 @@ impl ConfigTab {
     }
 
     pub fn help(&self) -> &'static str {
-        if self.input.is_some() {
+        if self.install.is_some() {
+            ""
+        } else if self.input.is_some() {
             "Enter confirm  Esc cancel  ←→ Home End move"
         } else if self.picking {
-            "↑↓ move  Enter open  Esc back  1 Games"
+            "↑↓ move  Enter open  I install  Esc back  1 Games"
         } else {
-            "↑↓ move  Enter/←→ change  e type  d default  s save  u undo  x export  i import  o open other  1 Games  q quit"
+            "↑↓ move  Enter/←→ change  e type  d default  s save  u undo  x export  i import  o open other  I install  1 Games  q quit"
         }
     }
 
@@ -500,6 +545,10 @@ impl ConfigTab {
             self.draw_picker(frame, area);
         } else {
             self.draw_settings(frame, area);
+        }
+        if let Some(install) = &self.install {
+            install.draw(frame);
+            return;
         }
         if let Some(input) = &self.input {
             let title = match input.purpose {
@@ -580,6 +629,7 @@ impl ConfigTab {
             items.push(ListItem::new(Line::from(vec![Span::from(name), state])));
         }
         items.push(ListItem::new("Open a memory card image or a .cnf file..."));
+        items.push(ListItem::new("Install OSDHub, RiptOPL, Neutrino, Ember...").cyan());
         let mut block =
             Block::bordered().title(" Where is OSDMENU.CNF? Memory cards in MemoryCards/**/BOOT/ ");
         if let Some(error) = &self.error {
@@ -826,11 +876,19 @@ mod tests {
         tab.key(KeyCode::Down);
         tab.key(KeyCode::Enter);
         assert_eq!(tab.cnf.get("b"), Some("1"));
+        // The last item opens the installer, for the memory card open
+        tab.key(KeyCode::Char('o'));
+        tab.key(KeyCode::Down);
+        tab.key(KeyCode::Down);
+        tab.key(KeyCode::Enter);
+        assert!(tab.install.is_some() && tab.typing());
+        let screen = render(&mut tab);
+        assert!(screen.contains("mc0:/BOOT/BOOT.ELF in B.mcd"));
+        tab.key(KeyCode::Esc);
+        assert!(tab.install.is_none());
         // Or a file
         tab.key(KeyCode::Char('o'));
-        tab.key(KeyCode::End);
-        tab.key(KeyCode::Down);
-        tab.key(KeyCode::Down);
+        tab.key(KeyCode::Up);
         tab.key(KeyCode::Enter);
         for c in "my.cnf".chars() {
             tab.key(KeyCode::Char(c));
