@@ -441,7 +441,7 @@ impl App {
         };
         self.rename_queue = games.into_iter().collect();
         if self.rename_queue.is_empty() {
-            self.log("Select or mark the games to rename".to_string());
+            self.log("No games to rename".to_string());
             return;
         }
         self.rename_count = (0, self.rename_queue.len());
@@ -575,7 +575,7 @@ impl App {
         self.draw_log(frame, log);
         frame.render_widget(
             Paragraph::new(
-                "↑↓ move  Space mark  a mark all  Tab PS2/PS1  c download art  t types  f force  r rename PS2 ISO  s rescan  q quit",
+                "↑↓ move  Space select  a select all  Tab PS2/PS1  c download images  t covers/discs  f keep/replace  r rename  s rescan  q quit",
             )
             .dark_gray(),
             help,
@@ -593,21 +593,24 @@ impl App {
                 Span::from(format!(" {label} "))
             }
         };
-        let types: Vec<&str> = TYPE_CHOICES[self.types]
-            .iter()
-            .map(|t| t.suffix())
-            .collect();
+        let types = match TYPE_CHOICES[self.types] {
+            [ArtType::Cov] => "covers only",
+            [ArtType::Ico] => "discs only",
+            _ => "covers + discs",
+        };
+        let existing = if self.force {
+            Span::from("replace").yellow()
+        } else {
+            Span::from("keep")
+        };
         let mut status = vec![
             tab("All", Filter::All),
             tab("PS2", Filter::Ps2),
             tab("PS1", Filter::Ps1),
-            Span::from(format!("   Art: {}", types.join("+"))),
-            Span::from(if self.force {
-                "   Force: on"
-            } else {
-                "   Force: off"
-            }),
-            Span::from(format!("   Marked: {}", self.marked.len())),
+            Span::from(format!("   Download (t): {types}")),
+            Span::from("   Images already in ART (f): "),
+            existing,
+            Span::from(format!("   Selected: {}", self.marked.len())),
         ];
         if self.downloads.is_some() {
             status.push(

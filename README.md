@@ -46,7 +46,8 @@ in yellow:
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-When the terminal is at least 100 columns wide, the case cover and the disc of the selected game are shown on the right.
+When the terminal is at least 100 columns wide, the case cover and the disc of the game under the cursor are shown on
+the right.
 Terminals that show images (kitty, Ghostty, WezTerm, foot, Konsole, iTerm2...) draw them as images, through kitty's
 protocol, Sixel or iTerm2's; the others (like Alacritty) draw them with colored half blocks. The terminal is asked which
 one it supports when the interface opens; `--no-images` skips that and uses half blocks.
@@ -54,11 +55,12 @@ one it supports when the interface opens; `--no-images` skips that and uses half
 | Key | |
 | --- | --- |
 | `↑` `↓` `PgUp` `PgDn` | Move |
-| `Space` / `a` | Mark the game / mark all (the actions apply to the marked games, or to all the games shown) |
+| `Space` / `a` | Selects the game / all the games shown (downloads are for the selected games, or for all the games shown when none is selected) |
 | `Tab` | All games, PS2 only or PS1 only |
-| `c` | Downloads the art of the games, in the background, with the progress in the log |
-| `t` / `f` | Art types to download (COV+ICO, COV, ICO) / downloads them again even when they're in `ART/` |
-| `r` | Renames the selected game, or the marked ones one after the other, in a name editor (below) |
+| `c` | Downloads the covers and discs of the games into `ART/`, in the background, with the progress in the log |
+| `t` | What to download: covers and discs, covers only or discs only (`Download` in the header) |
+| `f` | Whether the images already in `ART/` are kept or downloaded again and replaced (`Images already in ART`) |
+| `r` | Renames the game under the cursor, or the selected ones one after the other, in a name editor (below) |
 | `s` | Reads the games again |
 | `q` | Quits |
 
