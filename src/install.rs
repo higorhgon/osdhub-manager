@@ -228,6 +228,19 @@ fn under_marker(files: Vec<(String, Vec<u8>)>, marker: &str) -> Option<Vec<(Stri
     )
 }
 
+/// A file of OSDHub's package by its name: at the root of the unsigned package, or in `examples/` (the example
+/// OSDMENU.CNF) of the full one, so the one nearest the root
+fn package_file<'a>(files: &'a [(String, Vec<u8>)], name: &str) -> Option<&'a (String, Vec<u8>)> {
+    files
+        .iter()
+        .filter(|(path, _)| {
+            path.rsplit('/')
+                .next()
+                .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        })
+        .min_by_key(|(path, _)| path.matches('/').count())
+}
+
 /// Paths on the device keep the case of the folders already there (FAT and exFAT ignore it, but Linux may not)
 fn on_device(root: &Path, path: &str) -> PathBuf {
     let mut current = root.to_path_buf();
@@ -277,15 +290,11 @@ pub fn prepare(
         .unwrap();
     progress(format!("Downloading {}...", asset.name));
     let files = unzip(&download(&agent, &asset.url)?)?;
-    let elf = files
-        .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case("osdmenu.elf"))
-        .ok_or(format!("{} has no osdmenu.elf", asset.name))?;
+    let elf =
+        package_file(&files, "osdmenu.elf").ok_or(format!("{} has no osdmenu.elf", asset.name))?;
     plan.card_files.push((BOOT_ELF.to_string(), elf.1.clone()));
     if !target.has(config::CNF_PATH)? {
-        let example = files
-            .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case("OSDMENU.CNF"))
+        let example = package_file(&files, "OSDMENU.CNF")
             .ok_or(format!("{} has no example OSDMENU.CNF", asset.name))?;
         plan.card_files
             .push((config::CNF_PATH.to_string(), example.1.clone()));
@@ -581,6 +590,21 @@ mod tests {
         }
         zip.finish().unwrap();
         out.into_inner()
+    }
+
+    #[test]
+    fn packages() {
+        let files = vec![
+            (
+                "patcher/kelfbinder/ASSETS/SYS-CONF/OSDMENU.CNF".to_string(),
+                b"deep".to_vec(),
+            ),
+            ("examples/OSDMENU.CNF".to_string(), b"example".to_vec()),
+            ("osdmenu.elf".to_string(), b"elf".to_vec()),
+        ];
+        assert_eq!(package_file(&files, "OSDMENU.CNF").unwrap().1, b"example");
+        assert_eq!(package_file(&files, "osdmenu.elf").unwrap().1, b"elf");
+        assert!(package_file(&files, "hosdmenu.elf").is_none());
     }
 
     #[test]
