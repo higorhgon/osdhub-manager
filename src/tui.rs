@@ -671,13 +671,16 @@ impl App {
             match image {
                 Preview::Image(protocol) => {
                     // Centered, keeping its proportions: the cover is scaled to the area, while the disc,
-                    // a small image that breaks up when enlarged, keeps its size unless it doesn't fit
-                    let resize = if label == "ICO" {
-                        Resize::Fit(Some(FilterType::Triangle))
-                    } else {
-                        Resize::Scale(Some(FilterType::Triangle))
-                    };
-                    let size = protocol.size_for(resize.clone(), area.as_size());
+                    // a small image that breaks up when enlarged much, is shown at twice its size at most
+                    let resize = Resize::Scale(Some(FilterType::Triangle));
+                    let mut room = area.as_size();
+                    if label == "ICO" {
+                        let natural =
+                            protocol.size_for(Resize::Fit(Some(FilterType::Triangle)), room);
+                        room.width = room.width.min(natural.width * 2);
+                        room.height = room.height.min(natural.height * 2);
+                    }
+                    let size = protocol.size_for(resize.clone(), room);
                     let centered = Rect {
                         x: area.x + area.width.saturating_sub(size.width) / 2,
                         y: area.y + area.height.saturating_sub(size.height) / 2,
@@ -1003,7 +1006,11 @@ mod tests {
     }
 
     fn render(app: &mut App) -> (String, ratatui::buffer::Buffer) {
-        let mut terminal = Terminal::new(TestBackend::new(130, 24)).unwrap();
+        render_size(app, 130, 24)
+    }
+
+    fn render_size(app: &mut App, width: u16, height: u16) -> (String, ratatui::buffer::Buffer) {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|frame| app.draw(frame)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         let text = (0..buffer.area.height)
@@ -1034,6 +1041,20 @@ mod tests {
         };
         assert!(has(Color::Rgb(200, 30, 30)));
         assert!(has(Color::Rgb(30, 30, 200)));
+        // The disc is shown at twice its size when there's room: 64 pixels are 6 to 7 cells with half blocks'
+        // 10x20 pixel cells
+        let (_, buffer) = render_size(&mut app, 130, 50);
+        let blue = |y| {
+            (0..buffer.area.width)
+                .filter(|&x| {
+                    let cell = &buffer[(x, y)];
+                    cell.fg == Color::Rgb(30, 30, 200) || cell.bg == Color::Rgb(30, 30, 200)
+                })
+                .count()
+        };
+        let widest = (0..buffer.area.height).map(blue).max().unwrap();
+        println!("disc: {widest} cells wide");
+        assert!((12..=14).contains(&widest));
         assert!(screen.contains("rename"));
         assert!(screen.contains("folder"));
         assert!(screen.contains("no ID"));
