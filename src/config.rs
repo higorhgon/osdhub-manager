@@ -7,6 +7,7 @@
 
 use crate::memcard::{self, Card};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Where OSDMenu reads its configuration on the memory card
@@ -150,8 +151,13 @@ pub fn save(source: &Source, original: &str, new: &str) -> Result<PathBuf, Strin
     let mut temporary = path.as_os_str().to_owned();
     temporary.push(".osdhub-new");
     let temporary = PathBuf::from(temporary);
-    let written = fs::write(&temporary, &contents)
-        .and_then(|_| fs::File::open(&temporary)?.sync_all())
+    // Flushed to the card before it takes the old one's place (with the handle it was written with:
+    // Windows doesn't flush a file opened only for reading)
+    let written = fs::File::create(&temporary)
+        .and_then(|mut file| {
+            file.write_all(&contents)?;
+            file.sync_all()
+        })
         .and_then(|_| fs::rename(&temporary, path));
     if let Err(e) = written {
         let _ = fs::remove_file(&temporary);
