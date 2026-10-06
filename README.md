@@ -130,7 +130,8 @@ an ID in the file or folder name is used.
 Tried in order, for each game and art type:
 
 1. **OPL Manager's art database**, which OPL Manager downloaded from its own server until it was shut down, from
-   [its dump on GitHub](https://github.com/Luden02/psx-ps2-opl-art-database) (`PS1/<ID>/<ID>_COV.png`, `PS2/<ID>/...`),
+   [its dump on GitHub](https://github.com/higorhgon/psx-ps2-opl-art-database) (a fork of
+   [Luden02's](https://github.com/Luden02/psx-ps2-opl-art-database)) (`PS1/<ID>/<ID>_COV.png`, `PS2/<ID>/...`),
    with every OPL art type, including the discs (`ICO`). Its backup on archive.org has the same layout, and can be used
    instead with `--oplm-url https://archive.org/download/OPLM_ART_2024_09/OPLM_ART_2024_09.zip`
 2. **xlenore's [PS1](https://github.com/xlenore/psx-covers) and [PS2](https://github.com/xlenore/ps2-covers) cover

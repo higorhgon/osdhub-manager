@@ -1,7 +1,7 @@
 //! Downloads OPL ART images (`ART/<title ID>_COV.jpg`, `_ICO.png`...) for the games found on a device.
 //!
 //! Sources, tried in order:
-//! - OPL Manager's art database, from its dump on GitHub (`PS1/<ID>/<ID>_COV.png`, `PS2/...`),
+//! - OPL Manager's art database, from a fork of its dump on GitHub (`PS1/<ID>/<ID>_COV.png`, `PS2/...`),
 //!   with every OPL art type, including the disc (`ICO`); its backup on archive.org has the same layout
 //! - xlenore's PS1 and PS2 cover collections on GitHub (`covers/default/SLUS-20212.jpg`), case covers only
 
@@ -11,11 +11,11 @@ use std::io;
 use std::path::Path;
 use std::time::Duration;
 
-/// The dump of OPL Manager's art database on GitHub, whose images are PNG.
+/// The dump of OPL Manager's art database on GitHub (a fork of Luden02/psx-ps2-opl-art-database), whose images are PNG.
 /// Its backup on archive.org works too, as the files inside its zip are downloaded one by one:
 /// https://archive.org/download/OPLM_ART_2024_09/OPLM_ART_2024_09.zip
 pub const DEFAULT_OPLM_URL: &str =
-    "https://raw.githubusercontent.com/Luden02/psx-ps2-opl-art-database/main";
+    "https://raw.githubusercontent.com/higorhgon/psx-ps2-opl-art-database/main";
 const XLENORE_PS1_URL: &str =
     "https://raw.githubusercontent.com/xlenore/psx-covers/main/covers/default";
 const XLENORE_PS2_URL: &str =
