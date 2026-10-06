@@ -3,8 +3,9 @@
 //! reporting to the log at the bottom, so the interface keeps responding.
 //! The art of the selected game is previewed on the right, as an image in terminals that show images
 //! (kitty's protocol, Sixel or iTerm2's), or with colored half blocks in the others.
-//! The names that don't fit on OSDHub's menu are shown with the part it cuts in yellow, and renaming an ISO
-//! opens an editor for its name, which warns when the name is too long for OSDHub.
+//! The names that don't fit on OSDHub's menu are shown with the part it cuts in yellow, and renaming a game
+//! (a PS2 ISO, or a PS1 game folder, which is optional) opens an editor for its name, which warns when the name
+//! is too long for OSDHub.
 
 use crate::covers::{self, ArtType, Downloader, Outcome, Sources};
 use crate::games::{self, Console, Game, Layout};
@@ -106,7 +107,7 @@ enum Preview {
     Unreadable(String),
 }
 
-/// Edits the name of a PS2 ISO, between its title ID and its extension, which stay
+/// Edits the name of a PS2 ISO, between its title ID and its extension, which stay, or of a PS1 game folder
 struct Editor {
     game: usize,
     parts: rename::Parts,
@@ -394,7 +395,7 @@ impl App {
         });
     }
 
-    /// Opens the name editor for the marked PS2 ISOs, one after the other, or for the selected one
+    /// Opens the name editor for the marked games, one after the other, or for the selected one
     fn start_renames(&mut self) {
         let visible = self.visible();
         let marked: Vec<usize> = visible
@@ -407,12 +408,9 @@ impl App {
         } else {
             marked
         };
-        self.rename_queue = games
-            .into_iter()
-            .filter(|&i| self.games[i].console == Console::Ps2)
-            .collect();
+        self.rename_queue = games.into_iter().collect();
         if self.rename_queue.is_empty() {
-            self.log("Select or mark the PS2 ISOs to rename".to_string());
+            self.log("Select or mark the games to rename".to_string());
             return;
         }
         self.rename_count = (0, self.rename_queue.len());
@@ -447,7 +445,7 @@ impl App {
         let renamed = self.rename_count.0;
         if renamed > 0 {
             self.log(format!(
-                "{renamed} ISO(s) renamed. Refresh the Games list in OSDHub, since the paths changed."
+                "{renamed} game(s) renamed. Refresh the game lists in OSDHub, since the paths changed."
             ));
         }
     }
@@ -511,7 +509,10 @@ impl App {
                     rename::file_name(&game.path),
                     rename::file_name(&to)
                 );
-                game.name = games::display_name(&rename::file_name(&to));
+                game.name = match game.console {
+                    Console::Ps2 => games::display_name(&rename::file_name(&to)),
+                    Console::Ps1 => rename::file_name(&to),
+                };
                 game.path = to;
                 self.rename_count.0 += 1;
                 line
@@ -679,11 +680,21 @@ impl App {
             .into_iter()
             .map(|i| {
                 let game = &self.games[i];
+                // Whether the game needs a new name: OPL's name for the PS2 ISOs, and ⚠ for the names
+                // OSDHub cuts, which is optional to fix
+                let cut = !self.screen.fits(&game.name);
+                let warn = |text: &str| {
+                    if cut {
+                        format!("{text} ⚠").trim_start().to_string()
+                    } else {
+                        text.to_string()
+                    }
+                };
                 let opl = match (game.console, rename::plan(game)) {
-                    (Console::Ps1, _) => Cell::from("-").dark_gray(),
-                    (_, Plan::AlreadyNamed) => Cell::from("✓").green(),
-                    (_, Plan::Rename { .. }) => Cell::from("rename").yellow(),
-                    (_, Plan::Skip(_)) if game.subfolder => Cell::from("folder").dark_gray(),
+                    (Console::Ps1, _) | (_, Plan::AlreadyNamed) if cut => Cell::from("⚠").yellow(),
+                    (Console::Ps1, _) | (_, Plan::AlreadyNamed) => Cell::from("✓").green(),
+                    (_, Plan::Rename { .. }) => Cell::from(warn("rename")).yellow(),
+                    (_, Plan::Skip(_)) if game.subfolder => Cell::from(warn("folder")).dark_gray(),
                     (_, Plan::Skip(_)) => Cell::from("✗").red(),
                 };
                 let id = match &game.id {
@@ -707,10 +718,10 @@ impl App {
             Constraint::Length(11),
             Constraint::Length(3),
             Constraint::Length(3),
-            Constraint::Length(6),
+            Constraint::Length(8),
             Constraint::Fill(1),
         ];
-        let header = Row::new(["", "", "Title ID", "COV", "ICO", "OPL", "Name"]).bold();
+        let header = Row::new(["", "", "Title ID", "COV", "ICO", "Rename", "Name"]).bold();
         let table = Table::new(rows, widths)
             .header(header)
             .block(Block::bordered().title(format!(" Games ({}) ", self.visible().len())))
@@ -732,7 +743,7 @@ impl App {
     }
 
     fn draw_editor(&self, frame: &mut Frame, editor: &Editor) {
-        let [area] = Split::vertical([Constraint::Length(12)])
+        let [area] = Split::vertical([Constraint::Length(14)])
             .flex(Flex::Center)
             .areas(frame.area());
         let [area] = Split::horizontal([Constraint::Percentage(90)])
@@ -746,7 +757,7 @@ impl App {
         let visible = leading + self.screen.visible_chars(name.trim());
 
         // The title ID and the extension can't be edited; the characters OSDHub doesn't show are in yellow
-        let mut input = vec![Span::from(format!("{}.", editor.parts.id)).cyan()];
+        let mut input = vec![Span::from(editor.parts.prefix.clone()).cyan()];
         for (i, c) in editor.name.iter().enumerate() {
             let mut span = Span::from(c.to_string());
             if i >= visible {
@@ -762,19 +773,45 @@ impl App {
         }
         input.push(Span::from(editor.parts.ext.clone()).cyan());
 
-        let status = match (rename::check_name(&name), self.screen.warning(name.trim())) {
+        let status = match (
+            rename::check_name(editor.parts.console, &name),
+            self.screen.warning(name.trim()),
+        ) {
             (Err(e), _) => Line::from(format!("✗ {e}")).red(),
             (Ok(()), Some(warning)) => Line::from(format!("⚠ {warning}")).yellow(),
             (Ok(()), None) => {
                 Line::from(format!("✓ Fits on OSDHub's menu ({count} characters)")).green()
             }
         };
+        // A title ID read from the folder name, not from the disc, is lost with it
+        let id_lost = game.id_error.is_some()
+            && game
+                .id
+                .as_ref()
+                .is_some_and(|id| crate::disc::find_id(&name).as_ref() != Some(id));
         let error = match &editor.error {
             Some(e) => Line::from(format!("✗ {e}")).red(),
+            None if id_lost => Line::from(format!(
+                "⚠ The title ID {} comes from the name: without it, the game's art isn't found",
+                game.id.as_deref().unwrap_or_default()
+            ))
+            .yellow(),
             None => Line::from(""),
+        };
+        // Renaming a PS1 game is up to the user: Ember runs it with any folder name
+        let note = match (editor.parts.console, self.screen.fits(&editor.parts.name)) {
+            (Console::Ps1, true) => {
+                Line::from("Optional: PS1 games can have any name, and this one fits on OSDHub's menu")
+            }
+            (Console::Ps1, false) => Line::from(
+                "Optional: PS1 games can have any name, but the current one doesn't fit on OSDHub's menu",
+            )
+            .yellow(),
+            (Console::Ps2, _) => Line::from("The title ID and the extension stay, as OPL needs them"),
         };
         let covers = if self.screen.covers { "on" } else { "off" };
         let lines = vec![
+            note,
             Line::from(format!("Now: {}", rename::file_name(&game.path))).dark_gray(),
             Line::from(""),
             Line::from(input),
@@ -784,14 +821,18 @@ impl App {
             Line::from(""),
             Line::from("Enter rename   Tab skip   Esc cancel   ←→ Home End move").bold(),
             Line::from(format!(
-                "OSDHub menu_x {}, covers {covers} (--menu-x, --no-covers)",
+                "OSDHub menu_x {}, covers {covers} (--menu-x, --no-covers). OSDHub's favorite and play count of a renamed game start over.",
                 self.screen.menu_x
             ))
             .dark_gray(),
         ];
+        let what = match editor.parts.console {
+            Console::Ps2 => format!("PS2 ISO {}", game.id.as_deref().unwrap_or_default()),
+            Console::Ps1 => "PS1 game folder (optional)".to_string(),
+        };
         let title = format!(
-            " Rename {} ({} of {}) ",
-            editor.parts.id, editor.position, self.rename_count.1
+            " Rename {what} ({} of {}) ",
+            editor.position, self.rename_count.1
         );
         frame.render_widget(Clear, area);
         frame.render_widget(
@@ -993,7 +1034,7 @@ mod tests {
         assert_eq!(editor.name.iter().collect::<String>(), "Bloody Roar 3");
         let (screen, _) = render(&mut app);
         println!("{screen}");
-        assert!(screen.contains("Rename SLUS_202.12 (1 of 1)"));
+        assert!(screen.contains("Rename PS2 ISO SLUS_202.12 (1 of 1)"));
         assert!(screen.contains("SLUS_202.12.Bloody Roar 3 .iso"));
         assert!(screen.contains("Fits on OSDHub"));
         app.key(KeyCode::Char('q')); // Typed into the name
@@ -1017,10 +1058,23 @@ mod tests {
             name: long.to_string(),
             ..app.games[0].clone()
         };
+        // A PS1 game whose name doesn't fit, and whose title ID comes from the folder name
+        let ps1 = "Crash Bandicoot - The Wrath of Cortex (SLUS_013.92)";
+        std::fs::create_dir_all(dir.join(ps1)).unwrap();
+        app.games[3] = Game {
+            path: dir.join(ps1),
+            name: ps1.to_string(),
+            id: Some("SLUS_013.92".to_string()),
+            id_error: Some("no SYSTEM.CNF".to_string()),
+            ..app.games[3].clone()
+        };
         app.marked.extend([0, 2, 3]);
 
-        // The name is too long for OSDHub with covers: the cut part is in yellow, in the table and the editor
-        let (_, buffer) = render(&mut app);
+        // The names are too long for OSDHub with covers: the Rename column warns, and the cut part is in yellow,
+        // in the table and the editor
+        let (screen, buffer) = render(&mut app);
+        assert!(screen.contains("rename ⚠ HARVEST MOON"));
+        assert!(screen.contains("⚠        Crash Bandicoot - The Wrath"));
         let row = (0..buffer.area.height)
             .find(|&y| {
                 let line: String = (0..buffer.area.width)
@@ -1043,7 +1097,7 @@ mod tests {
         app.key(KeyCode::Char('r'));
         let (screen, _) = render(&mut app);
         println!("{screen}");
-        assert!(screen.contains("1 of 2"));
+        assert!(screen.contains("Rename PS2 ISO SLUS_202.12 (1 of 3)"));
         assert!(screen.contains("⚠ OSDHub shows \"HARVEST MOON"));
 
         // Only the name is edited: the title ID and the extension stay
@@ -1070,10 +1124,8 @@ mod tests {
         assert!(app.editor.as_ref().unwrap().error.is_some());
         app.key(KeyCode::Backspace);
 
-        // Enter renames and goes on to the next game: the folder game can't be renamed (and the PS1 game
-        // isn't one of them), so the renames end
+        // Enter renames and goes on to the next game: the folder game can't be renamed, so the PS1 game is next
         app.key(KeyCode::Enter);
-        assert!(app.editor.is_none());
         assert!(dir.join("SLUS_202.12.SAVE THE HOMELAND.iso").exists());
         assert_eq!(app.games[0].name, "SAVE THE HOMELAND");
         assert!(
@@ -1081,7 +1133,26 @@ mod tests {
                 .iter()
                 .any(|l| l.contains("Folder Game: not renamed"))
         );
-        assert!(app.log.iter().any(|l| l.contains("1 ISO(s) renamed")));
+
+        // Renaming the PS1 game is optional, but its name doesn't fit; the whole folder name is edited
+        let (screen, _) = render(&mut app);
+        println!("{screen}");
+        assert!(screen.contains("Rename PS1 game folder (optional) (3 of 3)"));
+        assert!(
+            screen
+                .contains("Optional: PS1 games can have any name, but the current one doesn't fit")
+        );
+        for _ in 0.." - The Wrath of Cortex (SLUS_013.92)".len() {
+            app.key(KeyCode::Backspace);
+        }
+        let (screen, _) = render(&mut app);
+        assert!(screen.contains("⚠ The title ID SLUS_013.92 comes from the name"));
+        assert!(screen.contains("✓ Fits on OSDHub's menu (15 characters)"));
+        app.key(KeyCode::Enter);
+        assert!(app.editor.is_none());
+        assert!(dir.join("Crash Bandicoot").is_dir());
+        assert_eq!(app.games[3].name, "Crash Bandicoot");
+        assert!(app.log.iter().any(|l| l.contains("2 game(s) renamed")));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

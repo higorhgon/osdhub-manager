@@ -1,10 +1,15 @@
 //! Renames PS2 ISOs to OPL's `<title ID>.<name>.iso` form (`SLUS_202.12.BLOODY ROAR 3.iso`), which OPL needs
 //! to find the game's art, configuration and cheats. OSDHub shows the same name either way.
+//! The names of the ISOs and of the PS1 game folders can be edited too, to fit on OSDHub's menu; the PS1 games
+//! don't need any particular name, so renaming them is optional.
 
 use crate::games::{Console, Game};
 use crate::osdhub::OPL_MAX_NAME_CHARS;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+/// OSDHub skips the PS1 game folders with longer names, in bytes (the launcher's GAMES_NAME_LEN)
+pub const PS1_MAX_NAME_BYTES: usize = 127;
 
 /// Characters that FAT and exFAT, the file systems of the devices, don't allow in file names
 const INVALID_CHARS: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
@@ -65,18 +70,24 @@ fn split_id_prefix(file: &str) -> (Option<String>, &str) {
     (None, file)
 }
 
-/// The parts of a PS2 ISO's name: the title ID and the extension, which the name editor keeps,
-/// and the name between them, the one OSDHub and OPL show
+/// The parts of a game's file or folder name: the PS2 ISOs' title ID prefix (`SLUS_202.12.`) and extension, which
+/// the name editor keeps, and the name between them, the one OSDHub and OPL show. A PS1 game folder is all name
 pub struct Parts {
-    pub id: String,
+    pub console: Console,
+    pub prefix: String,
     pub name: String,
     pub ext: String,
 }
 
-/// Splits the file name of a PS2 ISO that OPL can list into its parts
+/// Splits the name of a PS2 ISO that OPL can list, or of a PS1 game folder, into its parts
 pub fn parts(game: &Game) -> Result<Parts, String> {
-    if game.console != Console::Ps2 {
-        return Err("not a PS2 game".to_string());
+    if game.console == Console::Ps1 {
+        return Ok(Parts {
+            console: Console::Ps1,
+            prefix: String::new(),
+            name: file_name(&game.path),
+            ext: String::new(),
+        });
     }
     let Some(id) = &game.id else {
         return Err("title ID not found".to_string());
@@ -91,14 +102,16 @@ pub fn parts(game: &Game) -> Result<Parts, String> {
         _ => (rest, String::new()),
     };
     Ok(Parts {
-        id: id.clone(),
+        console: Console::Ps2,
+        prefix: format!("{id}."),
         name: name.to_string(),
         ext,
     })
 }
 
-/// Whether OPL can list an ISO with this name (without the title ID and the extension)
-pub fn check_name(name: &str) -> Result<(), String> {
+/// Whether OPL can list a PS2 ISO with this name (without the title ID and the extension),
+/// or OSDHub a PS1 game folder
+pub fn check_name(console: Console, name: &str) -> Result<(), String> {
     if name.trim().is_empty() {
         return Err("the name is empty".to_string());
     }
@@ -107,6 +120,15 @@ pub fn check_name(name: &str) -> Result<(), String> {
         .find(|c| INVALID_CHARS.contains(c) || c.is_control())
     {
         return Err(format!("the name can't contain {c:?}"));
+    }
+    if console == Console::Ps1 {
+        let bytes = name.trim().len();
+        if bytes > PS1_MAX_NAME_BYTES {
+            return Err(format!(
+                "OSDHub skips the folders with names over {PS1_MAX_NAME_BYTES} bytes ({bytes})"
+            ));
+        }
+        return Ok(());
     }
     let count = name.trim().chars().count();
     if count > OPL_MAX_NAME_CHARS {
@@ -117,11 +139,11 @@ pub fn check_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The path of `game` renamed to `<ID>.<name><extension>`, None when it already has that name
+/// The path of `game` renamed to `<prefix><name><extension>`, None when it already has that name
 pub fn target(game: &Game, parts: &Parts, name: &str) -> Result<Option<PathBuf>, String> {
-    check_name(name)?;
+    check_name(parts.console, name)?;
     let dir = game.path.parent().ok_or("no parent folder")?;
-    let to = dir.join(format!("{}.{}{}", parts.id, name.trim(), parts.ext));
+    let to = dir.join(format!("{}{}{}", parts.prefix, name.trim(), parts.ext));
     if to == game.path {
         return Ok(None);
     }
@@ -191,8 +213,12 @@ mod tests {
         };
         let parts = parts(&game).unwrap();
         assert_eq!(
-            (parts.id.as_str(), parts.name.as_str(), parts.ext.as_str()),
-            ("SLUS_202.12", "Bloody Roar 3", ".ISO")
+            (
+                parts.prefix.as_str(),
+                parts.name.as_str(),
+                parts.ext.as_str()
+            ),
+            ("SLUS_202.12.", "Bloody Roar 3", ".ISO")
         );
         assert_eq!(
             target(&game, &parts, " BR3 ").unwrap(),
@@ -215,6 +241,29 @@ mod tests {
             ..game
         };
         assert_eq!(target(&named, &parts, "Taken").unwrap(), None);
+
+        // A PS1 game folder is renamed whole, up to OSDHub's limit
+        fs::create_dir_all(dir.join("Crash Bandicoot (USA)")).unwrap();
+        let ps1 = Game {
+            console: Console::Ps1,
+            path: dir.join("Crash Bandicoot (USA)"),
+            name: "Crash Bandicoot (USA)".to_string(),
+            id: Some("SCUS_949.00".to_string()),
+            id_error: None,
+            subfolder: false,
+        };
+        let parts = super::parts(&ps1).unwrap();
+        assert_eq!(parts.name, "Crash Bandicoot (USA)");
+        assert_eq!(
+            target(&ps1, &parts, "Crash Bandicoot").unwrap(),
+            Some(dir.join("Crash Bandicoot"))
+        );
+        assert!(
+            target(&ps1, &parts, &"ã".repeat(64))
+                .unwrap_err()
+                .contains("127 bytes")
+        );
+        assert!(target(&ps1, &parts, &"a".repeat(127)).is_ok());
         fs::remove_dir_all(&dir).unwrap();
     }
 }

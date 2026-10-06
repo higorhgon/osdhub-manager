@@ -20,15 +20,18 @@ osdhub-manager /run/media/$USER/MMCE
 
 The device root is the folder where the device is mounted, which holds the `CD`, `DVD`, `EMBER` and `ART` folders.
 The games are shown in a table with their title ID, whether their case cover (`COV`) and disc (`ICO`) are in `ART/`,
-and whether the PS2 ISOs have OPL's name (`✓`, `rename`, or `folder` for ISOs in their own subfolder):
+and whether the game should be renamed: the PS2 ISOs without OPL's name show `rename` (`folder` for ISOs in their own
+subfolder, which OPL doesn't list), and the names that don't fit on OSDHub's menu show `⚠`, with the part OSDHub cuts
+in yellow:
 
 ```
-┌ Games (5) ──────────────────────────────────────────────────────┐
-│      Title ID    COV ICO OPL    Name                             │
-│● PS2 SLUS_202.12 ✓   ✗   rename Bloody Roar 3                    │
-│  PS2 SCUS_973.28 ✓   ✓   ✓      Gran Turismo 4                   │
-│  PS1 SCUS_949.00 ✗   ✗   -      Crash Bandicoot (USA)            │
-└─────────────────────────────────────────────────────────────────┘
+┌ Games (4) ───────────────────────────────────────────────────────────┐
+│      Title ID    COV ICO Rename   Name                               │
+│● PS2 SLUS_202.12 ✓   ✗   rename   Bloody Roar 3                      │
+│  PS2 SLUS_206.80 ✓   ✓   ⚠        HARVEST MOON - SAVE THE HOMELAND   │
+│  PS2 SCUS_973.28 ✓   ✓   ✓        Gran Turismo 4                     │
+│  PS1 SCUS_949.00 ✗   ✗   ✓        Crash Bandicoot (USA)              │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 When the terminal is at least 100 columns wide, the case cover and the disc of the selected game are shown on the right.
@@ -43,15 +46,19 @@ one it supports when the interface opens; `--no-images` skips that and uses half
 | `Tab` | All games, PS2 only or PS1 only |
 | `c` | Downloads the art of the games, in the background, with the progress in the log |
 | `t` / `f` | Art types to download (COV+ICO, COV, ICO) / downloads them again even when they're in `ART/` |
-| `r` | Renames the selected PS2 ISO, or the marked ones one after the other, in a name editor (below) |
+| `r` | Renames the selected game, or the marked ones one after the other, in a name editor (below) |
 | `s` | Reads the games again |
 | `q` | Quits |
 
-### Renaming ISOs
+### Renaming games
 
-`r` opens an editor for the name of the ISO, which only edits the name: the title ID before it and the extension
-after it stay (`SLUS_202.12.` `Bloody Roar 3` `.iso`), so the file always gets OPL's form. `Enter` renames it,
-`Tab` skips it and `Esc` stops renaming.
+`r` opens an editor for the name of the game. `Enter` renames it, `Tab` skips it and `Esc` stops renaming.
+
+- **PS2**: only the name of the ISO is edited: the title ID before it and the extension after it stay
+  (`SLUS_202.12.` `Bloody Roar 3` `.iso`), so the file always gets OPL's form.
+- **PS1**: the name of the game folder in `EMBER/games/` is edited. It's optional: Ember runs the games with any folder
+  name, so the editor only says whether the current name fits on OSDHub's menu. When the title ID was taken from the
+  folder name (the disc has no `SYSTEM.CNF`), the editor warns if the new name drops it, since the art is found by it.
 
 While the name is edited, the editor shows whether it fits on OSDHub's menu. OSDHub shortens the names that don't
 fit between the cover panel and the right edge of the screen with `...`, so the editor shows the name as OSDHub would
@@ -60,8 +67,10 @@ The width of a name is estimated from the widths of OSDSYS's font, for the menu 
 (OSDHub's `OSDSYS_menu_x`, 400 by default) and with the cover panel (`--no-covers` when `games_covers = 0`, which
 leaves the whole width of the screen for the names). OSDHub also keeps only the first 79 characters of a name.
 
-The editor doesn't accept names that OPL wouldn't list (over 160 characters) or that FAT and exFAT don't allow
-(`/ \ : * ? " < > |`), nor the name of another ISO.
+The editor doesn't accept names that OPL wouldn't list (ISOs over 160 characters) or OSDHub (PS1 folders over 127
+bytes), that FAT and exFAT don't allow (`/ \ : * ? " < > |`), nor the name of another game. OSDHub keeps the
+favorites and play counts of the games by their paths, so those of a renamed game start over; refresh the game lists
+in OSDHub after renaming.
 
 ## Commands
 
