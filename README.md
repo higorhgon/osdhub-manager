@@ -31,19 +31,19 @@ the folders that look like an OSDHub device (`OSDHub: CD DVD ART`):
 
 When the folder picked doesn't have the folders OSDHub uses (`ART`, `CD`, `DVD` and `EMBER/games`, or the ones given with
 `--cd-folder`/`--dvd-folder`), it offers to create them, which prepares a new SD card or USB drive for OSDHub.
-The games are shown in a table with their title ID, whether their case cover (`COV`) and disc (`ICO`) are in `ART/`,
+The games are shown in a table with their title ID, region, whether their case cover (`COV`) and disc (`ICO`) are in `ART/`,
 and whether the game should be renamed: the PS2 ISOs without OPL's name show `rename` (`folder` for ISOs in their own
 subfolder, which OPL doesn't list), and the names that don't fit on OSDHub's menu show `⚠`, with the part OSDHub cuts
 in yellow:
 
 ```
-┌ Games (4) ───────────────────────────────────────────────────────────┐
-│      Title ID    COV ICO Rename   Name                               │
-│● PS2 SLUS_202.12 ✓   ✗   rename   Bloody Roar 3                      │
-│  PS2 SLUS_206.80 ✓   ✓   ⚠        HARVEST MOON - SAVE THE HOMELAND   │
-│  PS2 SCUS_973.28 ✓   ✓   ✓        Gran Turismo 4                     │
-│  PS1 SCUS_949.00 ✗   ✗   ✓        Crash Bandicoot (USA)              │
-└──────────────────────────────────────────────────────────────────────┘
+┌ Games (4) ──────────────────────────────────────────────────────────────────┐
+│      Title ID    Region COV ICO Rename   Name                               │
+│● PS2 SLUS_202.12 USA    ✓   ✗   rename   Bloody Roar 3                      │
+│  PS2 SLUS_206.80 USA    ✓   ✓   ⚠        HARVEST MOON - SAVE THE HOMELAND   │
+│  PS2 SCUS_973.28 USA    ✓   ✓   ✓        Gran Turismo 4                     │
+│  PS1 SCUS_949.00 USA    ✗   ✗   ✓        Crash Bandicoot (USA)              │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 When the terminal is at least 100 columns wide, the case cover and the disc of the game under the cursor are shown on
@@ -55,6 +55,7 @@ one it supports when the interface opens; `--no-images` skips that and uses half
 | Key | |
 | --- | --- |
 | `↑` `↓` `PgUp` `PgDn` | Move |
+| `/` | Searches the games (below); `Enter` keeps the search and `Esc` clears it |
 | `Space` / `a` | Selects the game / all the games shown (downloads are for the selected games, or for all the games shown when none is selected) |
 | `Tab` | All games, PS2 only or PS1 only |
 | `c` | Downloads the covers and discs of the games into `ART/`, in the background, with the progress in the log |
@@ -63,6 +64,18 @@ one it supports when the interface opens; `--no-images` skips that and uses half
 | `r` | Renames the game under the cursor, or the selected ones one after the other, in a name editor (below) |
 | `s` | Reads the games again |
 | `q` | Quits |
+
+### Searching
+
+`/` searches the games by their system, title ID, region and name, with the words in any order and without case:
+`crash ps2` and `PS2 Crash` find the PS2 Crash games, and `crash` the Crash games of both systems. The title IDs are
+found in any form (`SLUS_202.12`, `SLUS-20212`, `slus20212` or a part of them), the systems also as `psx`, and the
+regions also as `ntsc-u`, `pal`, `europe`, `ntsc-j` or `japan`. A word that isn't there can still match a name with its
+letters in order (`crsh` finds Crash), and those games are listed after the others.
+
+The region comes from the title ID: its prefix tells the region of the disc (`SLUS` and `SCUS` are USA, `SLES` and
+`SCES` Europe, `SLPM`, `SLPS` and `SCPS` Japan, `SCKA` Korea...). For the games without a title ID, a region in the name
+is used, as in Redump's names (`Crash Bandicoot (USA)`).
 
 ### Renaming games
 

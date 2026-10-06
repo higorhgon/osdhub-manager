@@ -7,6 +7,7 @@ mod disc;
 mod games;
 mod osdhub;
 mod rename;
+mod search;
 mod tui;
 
 use covers::{ArtType, Downloader, Outcome, Sources};

@@ -12,6 +12,7 @@ use crate::covers::{self, ArtType, Downloader, Outcome, Sources};
 use crate::games::{self, Console, Game, Layout};
 use crate::osdhub::Screen;
 use crate::rename::{self, Plan};
+use crate::search::{self, Query};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::layout::{Constraint, Flex, Layout as Split, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
@@ -86,6 +87,10 @@ struct App {
     progress: (usize, usize),
     /// Where OSDHub draws the menu, for the names that don't fit
     screen: Screen,
+    /// The search of the games shown, typed after `/`
+    search: String,
+    /// Whether the keys are typing the search
+    searching: bool,
     /// The name editor of the ISO being renamed
     editor: Option<Editor>,
     /// The games to rename after the one in the editor
@@ -186,6 +191,8 @@ impl App {
             downloads: None,
             progress: (0, 0),
             screen,
+            search: String::new(),
+            searching: false,
             editor: None,
             rename_queue: VecDeque::new(),
             rename_count: (0, 0),
@@ -236,11 +243,17 @@ impl App {
         }
     }
 
-    /// Indices of the games shown with the current filter
+    /// Indices of the games shown with the current filter and search, the best matches first
     fn visible(&self) -> Vec<usize> {
-        (0..self.games.len())
+        let query = Query::new(&self.search);
+        let mut shown: Vec<(usize, usize)> = (0..self.games.len())
             .filter(|&i| self.filter.shows(self.games[i].console))
-            .collect()
+            .filter_map(|i| query.score(&self.games[i]).map(|score| (score, i)))
+            .collect();
+        if !query.is_empty() {
+            shown.sort_by_key(|&(score, _)| score);
+        }
+        shown.into_iter().map(|(_, i)| i).collect()
     }
 
     fn selected(&self) -> Option<usize> {
@@ -319,8 +332,15 @@ impl App {
             self.edit(code);
             return;
         }
+        if self.searching {
+            self.search_key(code);
+            return;
+        }
         let rows = self.visible().len();
         match code {
+            KeyCode::Char('/') => self.searching = true,
+            // Esc clears the search first
+            KeyCode::Esc if !self.search.is_empty() => self.set_search(String::new()),
             KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
             KeyCode::Down | KeyCode::Char('j') => self.move_by(1, rows),
             KeyCode::Up | KeyCode::Char('k') => self.move_by(-1, rows),
@@ -359,6 +379,38 @@ impl App {
             KeyCode::Char('s') if self.downloads.is_none() => self.rescan(),
             _ => {}
         }
+    }
+
+    /// Keys while typing the search: Enter keeps it, Esc clears it, and the arrows move in the games found
+    fn search_key(&mut self, code: KeyCode) {
+        let rows = self.visible().len();
+        match code {
+            KeyCode::Enter => self.searching = false,
+            KeyCode::Esc => {
+                self.searching = false;
+                self.set_search(String::new());
+            }
+            KeyCode::Backspace => {
+                let mut search = self.search.clone();
+                search.pop();
+                self.set_search(search);
+            }
+            KeyCode::Char(c) => {
+                let search = format!("{}{c}", self.search);
+                self.set_search(search);
+            }
+            KeyCode::Down => self.move_by(1, rows),
+            KeyCode::Up => self.move_by(-1, rows),
+            KeyCode::PageDown => self.move_by(10, rows),
+            KeyCode::PageUp => self.move_by(-10, rows),
+            _ => {}
+        }
+    }
+
+    fn set_search(&mut self, search: String) {
+        self.search = search;
+        let rows = self.visible().len();
+        self.table.select(if rows > 0 { Some(0) } else { None });
     }
 
     fn move_by(&mut self, delta: i32, rows: usize) {
@@ -575,7 +627,7 @@ impl App {
         self.draw_log(frame, log);
         frame.render_widget(
             Paragraph::new(
-                "↑↓ move  Space select  a select all  Tab PS2/PS1  c download images  t covers/discs  f keep/replace  r rename  s rescan  q quit",
+                "↑↓ move  / search  Space select  a select all  Tab PS2/PS1  c download images  t covers/discs  f keep/replace  r rename  s rescan  q quit",
             )
             .dark_gray(),
             help,
@@ -742,6 +794,7 @@ impl App {
                     Cell::from(if self.marked.contains(&i) { "●" } else { " " }).cyan(),
                     Cell::from(game.console.to_string()),
                     id,
+                    Cell::from(search::region(game).unwrap_or("-")),
                     art_cell(&self.art[i][0]),
                     art_cell(&self.art[i][1]),
                     opl,
@@ -753,15 +806,32 @@ impl App {
             Constraint::Length(1),
             Constraint::Length(3),
             Constraint::Length(11),
+            Constraint::Length(6),
             Constraint::Length(3),
             Constraint::Length(3),
             Constraint::Length(8),
             Constraint::Fill(1),
         ];
-        let header = Row::new(["", "", "Title ID", "COV", "ICO", "Rename", "Name"]).bold();
+        let header =
+            Row::new(["", "", "Title ID", "Region", "COV", "ICO", "Rename", "Name"]).bold();
+        let mut block = Block::bordered().title(format!(" Games ({}) ", self.visible().len()));
+        if self.searching || !self.search.is_empty() {
+            let cursor = if self.searching { "█" } else { "" };
+            let hint = if self.searching {
+                "  Enter keep  Esc clear "
+            } else {
+                "  / edit  Esc clear "
+            };
+            block = block.title_bottom(Line::from(vec![
+                Span::from(format!(" / {}{cursor}", self.search))
+                    .yellow()
+                    .bold(),
+                Span::from(hint).dark_gray(),
+            ]));
+        }
         let table = Table::new(rows, widths)
             .header(header)
-            .block(Block::bordered().title(format!(" Games ({}) ", self.visible().len())))
+            .block(block)
             .row_highlight_style(
                 Style::new()
                     .bg(Color::DarkGray)
@@ -995,6 +1065,8 @@ mod tests {
                 menu_x: 400,
                 covers: true,
             },
+            search: String::new(),
+            searching: false,
             editor: None,
             rename_queue: VecDeque::new(),
             rename_count: (0, 0),
@@ -1097,6 +1169,47 @@ mod tests {
         app.key(KeyCode::Esc);
         assert!(app.editor.is_none());
         app.key(KeyCode::Char('q'));
+        assert!(app.quit);
+    }
+
+    #[test]
+    fn search() {
+        let mut app = app();
+        let (screen, _) = render(&mut app);
+        assert!(screen.contains("SLUS_202.12 USA"));
+        assert!(screen.contains("no ID       -"));
+
+        // `/` types the search, where every key is text (q doesn't quit), in any order
+        app.key(KeyCode::Char('/'));
+        for c in "ps1 crash q".chars() {
+            app.key(KeyCode::Char(c));
+        }
+        assert!(!app.quit);
+        assert!(app.visible().is_empty());
+        app.key(KeyCode::Backspace);
+        app.key(KeyCode::Backspace);
+        assert_eq!(app.visible(), vec![3]);
+        let (screen, _) = render(&mut app);
+        println!("{screen}");
+        assert!(screen.contains("/ ps1 crash█"));
+        assert!(screen.contains("Games (1)"));
+
+        // Enter keeps the search, while the keys work again; Esc clears it, and then quits
+        app.key(KeyCode::Enter);
+        assert!(!app.searching);
+        assert_eq!(app.selected(), Some(3));
+        app.key(KeyCode::Esc);
+        assert_eq!(app.visible().len(), 5);
+        assert!(!app.quit);
+
+        // A region, and the letters of a name in order
+        app.key(KeyCode::Char('/'));
+        for c in "usa grtur".chars() {
+            app.key(KeyCode::Char(c));
+        }
+        assert_eq!(app.visible(), vec![1]);
+        app.key(KeyCode::Esc);
+        app.key(KeyCode::Esc);
         assert!(app.quit);
     }
 
