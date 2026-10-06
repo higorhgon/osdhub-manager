@@ -45,6 +45,7 @@ pub struct Game {
 }
 
 /// Where the games are on the device
+#[derive(Clone)]
 pub struct Layout {
     pub cd_folder: String,
     pub dvd_folder: String,

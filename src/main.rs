@@ -1,6 +1,7 @@
 //! osdhub-manager: manages the games of an OSDHub device from a computer
 //! (the SD card of an MMCE device, a USB drive...), without OPL Manager.
 
+mod browse;
 mod covers;
 mod disc;
 mod games;
@@ -11,14 +12,15 @@ mod tui;
 use covers::{ArtType, Downloader, Outcome, Sources};
 use games::{Console, Layout};
 use osdhub::Screen;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 const USAGE: &str = "\
 osdhub-manager - manages the games of an OSDHub device from a computer
 
 USAGE:
-    osdhub-manager <DEVICE ROOT> [OPTIONS]            Opens the terminal interface
+    osdhub-manager [DEVICE ROOT] [OPTIONS]            Opens the terminal interface, choosing the device
+                                                      root in a folder browser when it isn't given
     osdhub-manager <COMMAND> <DEVICE ROOT> [OPTIONS]
 
 COMMANDS:
@@ -53,7 +55,8 @@ EXAMPLES:
 
 struct Options {
     command: String,
-    root: PathBuf,
+    /// None to pick it in the terminal interface
+    root: Option<PathBuf>,
     consoles: Vec<Console>,
     types: Vec<ArtType>,
     force: bool,
@@ -72,7 +75,7 @@ fn parse_args() -> Result<Options, String> {
     let (mut ps1, mut ps2) = (false, false);
     let mut options = Options {
         command: String::new(),
-        root: PathBuf::new(),
+        root: None,
         consoles: Vec::new(),
         types: vec![ArtType::Cov, ArtType::Ico],
         force: false,
@@ -144,17 +147,27 @@ fn parse_args() -> Result<Options, String> {
         }
     }
 
+    const COMMANDS: [&str; 4] = ["tui", "list", "covers", "rename"];
     let (command, root) = match positional.as_slice() {
-        [root] => ("tui", root),
-        [command, root] => (command.as_str(), root),
+        [] => ("tui", None),
+        [command] if COMMANDS.contains(&command.as_str()) && !Path::new(command).is_dir() => {
+            (command.as_str(), None)
+        }
+        [root] => ("tui", Some(root)),
+        [command, root] => (command.as_str(), Some(root)),
         _ => {
             return Err("expected the device root, with an optional command before it".to_string());
         }
     };
     options.command = command.to_string();
-    options.root = PathBuf::from(root);
-    if !options.root.is_dir() {
-        return Err(format!("{} is not a folder", options.root.display()));
+    if let Some(root) = root {
+        let root = PathBuf::from(root);
+        if !root.is_dir() {
+            return Err(format!("{} is not a folder", root.display()));
+        }
+        options.root = Some(root);
+    } else if command != "tui" {
+        return Err(format!("{command} needs the device root"));
     }
     if !ps1 && !ps2 {
         ps1 = true;
@@ -169,8 +182,16 @@ fn parse_args() -> Result<Options, String> {
     Ok(options)
 }
 
+/// The device root of the commands, which parse_args() requires
+fn device_root(options: &Options) -> &Path {
+    options
+        .root
+        .as_deref()
+        .expect("the commands need the device root")
+}
+
 fn list(options: &Options) -> ExitCode {
-    let games = games::scan(&options.root, &options.layout, &options.consoles);
+    let games = games::scan(device_root(options), &options.layout, &options.consoles);
     for game in &games {
         let id = game.id.as_deref().unwrap_or("-----------");
         let note = match (&game.id, &game.id_error) {
@@ -188,8 +209,8 @@ fn list(options: &Options) -> ExitCode {
 }
 
 fn download_covers(options: &Options) -> ExitCode {
-    let games = games::scan(&options.root, &options.layout, &options.consoles);
-    let art_dir = options.root.join("ART");
+    let games = games::scan(device_root(options), &options.layout, &options.consoles);
+    let art_dir = device_root(options).join("ART");
     let downloader = Downloader::new(Sources {
         oplm_url: options.oplm_url.clone(),
         xlenore: options.xlenore,
@@ -258,7 +279,7 @@ fn download_covers(options: &Options) -> ExitCode {
 }
 
 fn rename_isos(options: &Options) -> ExitCode {
-    let games = games::scan(&options.root, &options.layout, &[Console::Ps2]);
+    let games = games::scan(device_root(options), &options.layout, &[Console::Ps2]);
     let (mut renamed, mut failed, mut cut) = (0, 0, 0);
     for game in &games {
         if let Some(warning) = options.screen.warning(&game.name) {

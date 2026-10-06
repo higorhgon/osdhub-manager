@@ -7,6 +7,7 @@
 //! (a PS2 ISO, or a PS1 game folder, which is optional) opens an editor for its name, which warns when the name
 //! is too long for OSDHub.
 
+use crate::browse;
 use crate::covers::{self, ArtType, Downloader, Outcome, Sources};
 use crate::games::{self, Console, Game, Layout};
 use crate::osdhub::Screen;
@@ -123,8 +124,9 @@ struct Editor {
 const PREVIEW_MIN_WIDTH: u16 = 100;
 const PREVIEW_WIDTH: u16 = 32;
 
+/// Opens the interface on `root`, or on a device root picked in a folder browser first
 pub fn run(
-    root: PathBuf,
+    root: Option<PathBuf>,
     layout: Layout,
     sources: Sources,
     consoles: &[Console],
@@ -136,35 +138,64 @@ pub fn run(
         [Console::Ps1] => Filter::Ps1,
         _ => Filter::All,
     };
-    let mut app = App {
-        root,
-        layout,
-        sources,
-        games: Vec::new(),
-        art: Vec::new(),
-        filter,
-        table: TableState::default(),
-        marked: BTreeSet::new(),
-        types: 0,
-        force: false,
-        log: Vec::new(),
-        downloads: None,
-        progress: (0, 0),
-        screen,
-        editor: None,
-        rename_queue: VecDeque::new(),
-        rename_count: (0, 0),
-        quit: false,
-        query_images,
-        picker: None,
-        preview: None,
-    };
-    println!("Reading the games on {}...", app.root.display());
-    app.rescan();
-    ratatui::run(|terminal| app.main_loop(terminal))
+    ratatui::run(|terminal| {
+        let (root, created) = match root {
+            Some(root) => (root, Vec::new()),
+            None => match browse::pick(terminal, &layout)? {
+                Some(picked) => (picked.root, picked.created),
+                None => return Ok(()),
+            },
+        };
+        terminal.draw(|frame| {
+            frame.render_widget(
+                Paragraph::new(format!("Reading the games on {}...", root.display())),
+                frame.area(),
+            )
+        })?;
+        let mut app = App::new(root, layout, sources, filter, query_images, screen);
+        if !created.is_empty() {
+            let folders: Vec<String> = created.iter().map(|f| format!("{f}/")).collect();
+            app.log(format!("Created {}", folders.join(" ")));
+        }
+        app.rescan();
+        app.main_loop(terminal)
+    })
 }
 
 impl App {
+    fn new(
+        root: PathBuf,
+        layout: Layout,
+        sources: Sources,
+        filter: Filter,
+        query_images: bool,
+        screen: Screen,
+    ) -> App {
+        App {
+            root,
+            layout,
+            sources,
+            games: Vec::new(),
+            art: Vec::new(),
+            filter,
+            table: TableState::default(),
+            marked: BTreeSet::new(),
+            types: 0,
+            force: false,
+            log: Vec::new(),
+            downloads: None,
+            progress: (0, 0),
+            screen,
+            editor: None,
+            rename_queue: VecDeque::new(),
+            rename_count: (0, 0),
+            quit: false,
+            query_images,
+            picker: None,
+            preview: None,
+        }
+    }
+
     fn art_dir(&self) -> PathBuf {
         self.root.join("ART")
     }

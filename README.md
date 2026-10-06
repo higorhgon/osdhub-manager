@@ -19,6 +19,18 @@ osdhub-manager /run/media/$USER/MMCE
 ```
 
 The device root is the folder where the device is mounted, which holds the `CD`, `DVD`, `EMBER` and `ART` folders.
+Without it (`osdhub-manager`, or opening the executable from a file manager), a folder browser opens first. It starts in
+the folder where the desktop mounts the removable drives (`/run/media/$USER`, `/media/$USER` or `/Volumes`) and marks
+the folders that look like an OSDHub device (`OSDHub: CD DVD ART`):
+
+| Key | |
+| --- | --- |
+| `↑` `↓` / `Enter` / `←` | Move / open the folder / go back |
+| `s` | Uses the selected folder as the device root (or `✓ Use this folder` for the folder being browsed) |
+| `~` | Home folder |
+
+When the folder picked doesn't have the folders OSDHub uses (`ART`, `CD`, `DVD` and `EMBER/games`, or the ones given with
+`--cd-folder`/`--dvd-folder`), it offers to create them, which prepares a new SD card or USB drive for OSDHub.
 The games are shown in a table with their title ID, whether their case cover (`COV`) and disc (`ICO`) are in `ART/`,
 and whether the game should be renamed: the PS2 ISOs without OPL's name show `rename` (`folder` for ISOs in their own
 subfolder, which OPL doesn't list), and the names that don't fit on OSDHub's menu show `⚠`, with the part OSDHub cuts
