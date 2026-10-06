@@ -522,8 +522,13 @@ impl App {
         for ((image, area), label) in images.iter_mut().zip([cov, ico]).zip(["COV", "ICO"]) {
             match image {
                 Preview::Image(protocol) => {
-                    // Scaled up or down to the area, keeping its proportions, and centered
-                    let resize = Resize::Scale(Some(FilterType::Triangle));
+                    // Centered, keeping its proportions: the cover is scaled to the area, while the disc,
+                    // a small image that breaks up when enlarged, keeps its size unless it doesn't fit
+                    let resize = if label == "ICO" {
+                        Resize::Fit(Some(FilterType::Triangle))
+                    } else {
+                        Resize::Scale(Some(FilterType::Triangle))
+                    };
                     let size = protocol.size_for(resize.clone(), area.as_size());
                     let centered = Rect {
                         x: area.x + area.width.saturating_sub(size.width) / 2,
