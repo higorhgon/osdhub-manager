@@ -7,7 +7,9 @@ repository = "https://github.com/higorhgon/osdhub-manager"
 
 [dependencies]
 crossterm = "0.29"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 ratatui = "0.30.2"
+ratatui-image = { version = "11.1.0", default-features = false, features = ["crossterm"] }
 ureq = "3"
 
 # Small static binaries for the releases

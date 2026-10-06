@@ -36,6 +36,7 @@ OPTIONS:
     --dvd-folder <DIR>  PS2 DVD folder (default: DVD), like games_dvd_folder
     --oplm-url <URL>    OPL Manager art database (default: the archive.org backup), \"none\" to skip it
     --no-xlenore        Doesn't use xlenore's cover collections
+    --no-images         Draws the art previews with colored half blocks instead of asking the terminal for images
     -h, --help          Shows this help
     -V, --version       Shows the version
 
@@ -57,6 +58,7 @@ struct Options {
     layout: Layout,
     oplm_url: Option<String>,
     xlenore: bool,
+    images: bool,
 }
 
 fn parse_args() -> Result<Options, String> {
@@ -77,6 +79,7 @@ fn parse_args() -> Result<Options, String> {
         },
         oplm_url: Some(covers::DEFAULT_OPLM_URL.to_string()),
         xlenore: true,
+        images: true,
     };
 
     while let Some(arg) = args.next() {
@@ -96,6 +99,7 @@ fn parse_args() -> Result<Options, String> {
             "--dry-run" => options.dry_run = true,
             "--apply" => options.apply = true,
             "--no-xlenore" => options.xlenore = false,
+            "--no-images" => options.images = false,
             "--types" => {
                 let list = value("--types")?;
                 options.types = list
@@ -296,6 +300,7 @@ fn main() -> ExitCode {
                 options.layout,
                 sources,
                 &options.consoles,
+                options.images,
             ) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {

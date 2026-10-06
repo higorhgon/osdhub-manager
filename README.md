@@ -31,6 +31,11 @@ and whether the PS2 ISOs have OPL's name (`✓`, `rename`, or `folder` for ISOs 
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+When the terminal is at least 100 columns wide, the case cover and the disc of the selected game are shown on the right.
+Terminals that show images (kitty, Ghostty, WezTerm, foot, Konsole, iTerm2...) draw them as images, through kitty's
+protocol, Sixel or iTerm2's; the others (like Alacritty) draw them with colored half blocks. The terminal is asked which
+one it supports when the interface opens; `--no-images` skips that and uses half blocks.
+
 | Key | |
 | --- | --- |
 | `↑` `↓` `PgUp` `PgDn` | Move |
@@ -78,6 +83,7 @@ covers and picks up the new ISO paths.
 | `--cd-folder DIR` / `--dvd-folder DIR` | PS2 folders (`CD` and `DVD` by default), like OSDHub's `games_cd_folder`/`games_dvd_folder` |
 | `--oplm-url URL` | OPL Manager's art database (`none` to skip it) |
 | `--no-xlenore` | Doesn't use xlenore's cover collections |
+| `--no-images` | Draws the art previews with colored half blocks instead of asking the terminal for images |
 
 ## Games
 
@@ -109,6 +115,7 @@ Images already in `ART/` (as `.jpg` or `.png`) aren't downloaded again unless `-
 cargo build --release
 ```
 
-The dependencies are [ratatui](https://ratatui.rs) and crossterm (the terminal interface) and
+The dependencies are [ratatui](https://ratatui.rs), crossterm and [ratatui-image](https://github.com/ratatui/ratatui-image)
+with [image](https://github.com/image-rs/image) (JPEG and PNG only) for the terminal interface, and
 [ureq](https://github.com/algesten/ureq) (HTTPS with rustls), pinned by `Cargo.lock`. The release
 binaries are built by GitHub Actions when a `v*` tag is pushed: a static Linux binary (musl), Windows and macOS.

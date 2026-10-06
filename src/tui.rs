@@ -1,6 +1,8 @@
 //! Terminal interface: the games of the device in a table, with their title IDs, art and OPL names,
 //! where the art is downloaded and the PS2 ISOs are renamed. Downloads run in a separate thread,
 //! reporting to the log at the bottom, so the interface keeps responding.
+//! The art of the selected game is previewed on the right, as an image in terminals that show images
+//! (kitty's protocol, Sixel or iTerm2's), or with colored half blocks in the others.
 
 use crate::covers::{self, ArtType, Downloader, Outcome, Sources};
 use crate::games::{self, Console, Game, Layout};
@@ -11,6 +13,10 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Clear, Paragraph, Row, Table, TableState, Wrap};
 use ratatui::{DefaultTerminal, Frame};
+use ratatui_image::picker::Picker;
+use ratatui_image::picker::cap_parser::QueryStdioOptions;
+use ratatui_image::protocol::StatefulProtocol;
+use ratatui_image::{FilterType, Resize, StatefulImage};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
@@ -76,13 +82,31 @@ struct App {
     /// Renames waiting for confirmation
     confirm: Option<Vec<(PathBuf, PathBuf)>>,
     quit: bool,
+    /// Asks the terminal for its image support, or draws the images with half blocks
+    query_images: bool,
+    /// How images are drawn, found by querying the terminal when the interface starts
+    picker: Option<Picker>,
+    /// The COV and ICO images of the game being previewed
+    preview: Option<(usize, [Preview; 2])>,
 }
+
+/// A previewed image
+enum Preview {
+    Image(Box<StatefulProtocol>),
+    Missing,
+    Unreadable(String),
+}
+
+/// The preview is only shown when the terminal is at least this wide
+const PREVIEW_MIN_WIDTH: u16 = 100;
+const PREVIEW_WIDTH: u16 = 32;
 
 pub fn run(
     root: PathBuf,
     layout: Layout,
     sources: Sources,
     consoles: &[Console],
+    query_images: bool,
 ) -> std::io::Result<()> {
     let filter = match consoles {
         [Console::Ps2] => Filter::Ps2,
@@ -105,6 +129,9 @@ pub fn run(
         progress: (0, 0),
         confirm: None,
         quit: false,
+        query_images,
+        picker: None,
+        preview: None,
     };
     println!("Reading the games on {}...", app.root.display());
     app.rescan();
@@ -119,6 +146,7 @@ impl App {
     fn rescan(&mut self) {
         self.games = games::scan(&self.root, &self.layout, &[Console::Ps2, Console::Ps1]);
         self.refresh_art();
+        self.preview = None;
         self.marked.clear();
         let count = self.visible().len();
         self.table.select(if count > 0 { Some(0) } else { None });
@@ -176,6 +204,18 @@ impl App {
     }
 
     fn main_loop(&mut self, terminal: &mut DefaultTerminal) -> std::io::Result<()> {
+        // Asks the terminal which image protocol it supports and its font size, once it's in raw mode.
+        // Terminals answer right away; one that doesn't gets half blocks after the timeout
+        let picker = if self.query_images {
+            let options = QueryStdioOptions {
+                timeout: Duration::from_secs(1),
+                ..Default::default()
+            };
+            Picker::from_query_stdio_with_options(options).unwrap_or_else(|_| Picker::halfblocks())
+        } else {
+            Picker::halfblocks()
+        };
+        self.picker = Some(picker);
         while !self.quit {
             self.receive();
             terminal.draw(|frame| self.draw(frame))?;
@@ -195,7 +235,16 @@ impl App {
         for message in messages {
             match message {
                 Message::Log(line) => self.log(line),
-                Message::Art(game, art, file) => self.art[game][art as usize] = Some(file),
+                Message::Art(game, art, file) => {
+                    self.art[game][art as usize] = Some(file);
+                    if self
+                        .preview
+                        .as_ref()
+                        .is_some_and(|(previewed, _)| *previewed == game)
+                    {
+                        self.preview = None;
+                    }
+                }
                 Message::Progress(done, total) => self.progress = (done, total),
                 Message::Done => {
                     self.downloads = None;
@@ -369,7 +418,15 @@ impl App {
         ])
         .areas(frame.area());
         self.draw_header(frame, header);
-        self.draw_table(frame, table);
+        if table.width >= PREVIEW_MIN_WIDTH && self.picker.is_some() {
+            let [table, preview] =
+                Split::horizontal([Constraint::Fill(1), Constraint::Length(PREVIEW_WIDTH)])
+                    .areas(table);
+            self.draw_table(frame, table);
+            self.draw_preview(frame, preview);
+        } else {
+            self.draw_table(frame, table);
+        }
         self.draw_log(frame, log);
         frame.render_widget(
             Paragraph::new(
@@ -418,6 +475,80 @@ impl App {
         }
         let block = Block::bordered().title(format!(" osdhub-manager — {} ", self.root.display()));
         frame.render_widget(Paragraph::new(Line::from(status)).block(block), area);
+    }
+
+    /// Loads the images of the selected game when the selection changes
+    fn load_preview(&mut self) {
+        let Some(game) = self.selected() else {
+            self.preview = None;
+            return;
+        };
+        if self
+            .preview
+            .as_ref()
+            .is_some_and(|(previewed, _)| *previewed == game)
+        {
+            return;
+        }
+        let Some(picker) = &self.picker else { return };
+        let art_dir = self.art_dir();
+        let load = |file: &Option<String>| match file {
+            None => Preview::Missing,
+            Some(file) => match image::open(art_dir.join(file)) {
+                Ok(image) => Preview::Image(Box::new(picker.new_resize_protocol(image))),
+                Err(e) => Preview::Unreadable(e.to_string()),
+            },
+        };
+        let images = [load(&self.art[game][0]), load(&self.art[game][1])];
+        self.preview = Some((game, images));
+    }
+
+    fn draw_preview(&mut self, frame: &mut Frame, area: Rect) {
+        self.load_preview();
+        let title = match self.selected() {
+            Some(game) => format!(" {} ", self.games[game].id.as_deref().unwrap_or("no ID")),
+            None => " Art ".to_string(),
+        };
+        let block = Block::bordered().title(title);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        let Some((_, images)) = &mut self.preview else {
+            return;
+        };
+
+        // The case cover above the disc, with their proportions (a cell is about twice as tall as it is wide)
+        let [cov, ico] =
+            Split::vertical([Constraint::Percentage(65), Constraint::Percentage(35)]).areas(inner);
+        for ((image, area), label) in images.iter_mut().zip([cov, ico]).zip(["COV", "ICO"]) {
+            match image {
+                Preview::Image(protocol) => {
+                    // Scaled up or down to the area, keeping its proportions, and centered
+                    let resize = Resize::Scale(Some(FilterType::Triangle));
+                    let size = protocol.size_for(resize.clone(), area.as_size());
+                    let centered = Rect {
+                        x: area.x + area.width.saturating_sub(size.width) / 2,
+                        y: area.y + area.height.saturating_sub(size.height) / 2,
+                        width: size.width.min(area.width),
+                        height: size.height.min(area.height),
+                    };
+                    frame.render_stateful_widget(
+                        StatefulImage::default().resize(resize),
+                        centered,
+                        protocol.as_mut(),
+                    );
+                }
+                Preview::Missing => frame.render_widget(
+                    Paragraph::new(format!("no {label}")).dark_gray().centered(),
+                    area,
+                ),
+                Preview::Unreadable(e) => frame.render_widget(
+                    Paragraph::new(format!("{label}: {e}"))
+                        .red()
+                        .wrap(Wrap { trim: true }),
+                    area,
+                ),
+            }
+        }
     }
 
     fn draw_table(&mut self, frame: &mut Frame, area: Rect) {
@@ -537,6 +668,19 @@ mod tests {
         }
     }
 
+    /// A device root with a red COV and a blue ICO for SLUS_202.12 in ART/
+    fn root_with_art() -> PathBuf {
+        let root = std::env::temp_dir().join(format!("osdhub-manager-tui-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("ART")).unwrap();
+        image::RgbImage::from_pixel(64, 90, image::Rgb([200, 30, 30]))
+            .save(root.join("ART/SLUS_202.12_COV.png"))
+            .unwrap();
+        image::RgbImage::from_pixel(64, 64, image::Rgb([30, 30, 200]))
+            .save(root.join("ART/SLUS_202.12_ICO.png"))
+            .unwrap();
+        root
+    }
+
     fn app() -> App {
         let games = vec![
             game(
@@ -570,8 +714,11 @@ mod tests {
             game(Console::Ps1, "Unknown", "Unknown", None, false),
         ];
         let art = vec![
-            [Some("x".into()), None],
-            [Some("x".into()), Some("y".into())],
+            [
+                Some("SLUS_202.12_COV.png".into()),
+                Some("SLUS_202.12_ICO.png".into()),
+            ],
+            [Some("missing.png".into()), None],
             [None, None],
             [None, None],
             [None, None],
@@ -579,7 +726,7 @@ mod tests {
         let mut table = TableState::default();
         table.select(Some(0));
         App {
-            root: PathBuf::from("/card"),
+            root: root_with_art(),
             layout: Layout {
                 cd_folder: "CD".into(),
                 dvd_folder: "DVD".into(),
@@ -600,14 +747,17 @@ mod tests {
             progress: (0, 0),
             confirm: None,
             quit: false,
+            query_images: false,
+            picker: Some(Picker::halfblocks()),
+            preview: None,
         }
     }
 
-    fn render(app: &mut App) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(120, 22)).unwrap();
+    fn render(app: &mut App) -> (String, ratatui::buffer::Buffer) {
+        let mut terminal = Terminal::new(TestBackend::new(130, 24)).unwrap();
         terminal.draw(|frame| app.draw(frame)).unwrap();
         let buffer = terminal.backend().buffer().clone();
-        (0..buffer.area.height)
+        let text = (0..buffer.area.height)
             .map(|y| {
                 (0..buffer.area.width)
                     .map(|x| buffer[(x, y)].symbol())
@@ -616,19 +766,36 @@ mod tests {
                     .to_string()
             })
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("\n");
+        (text, buffer)
     }
 
     #[test]
     fn screen() {
         let mut app = app();
-        let screen = render(&mut app);
+        let (screen, buffer) = render(&mut app);
         println!("{screen}");
         assert!(screen.contains("SLUS_202.12"));
+        // The preview shows the red cover and the blue disc of the selected game as half blocks
+        let has = |color: Color| {
+            buffer
+                .content()
+                .iter()
+                .any(|c| c.fg == color || c.bg == color)
+        };
+        assert!(has(Color::Rgb(200, 30, 30)));
+        assert!(has(Color::Rgb(30, 30, 200)));
         assert!(screen.contains("rename"));
         assert!(screen.contains("folder"));
         assert!(screen.contains("no ID"));
         assert!(screen.contains("Games (5)"));
+
+        // A missing image is reported in the preview
+        app.key(KeyCode::Down);
+        let (screen, _) = render(&mut app);
+        assert!(screen.contains("SCUS_973.28 ─"));
+        assert!(screen.contains("No such file") || screen.contains("cannot find"));
+        assert!(screen.contains("no ICO"));
     }
 
     #[test]
@@ -650,7 +817,7 @@ mod tests {
         let renames = app.confirm.clone().unwrap();
         assert_eq!(renames.len(), 1);
         assert!(renames[0].1.ends_with("SLUS_202.12.Bloody Roar 3.iso"));
-        let screen = render(&mut app);
+        let (screen, _) = render(&mut app);
         println!("{screen}");
         assert!(screen.contains("Rename 1 PS2 ISO(s)"));
         app.key(KeyCode::Char('n'));
