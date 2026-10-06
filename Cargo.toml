@@ -1,0 +1,17 @@
+[package]
+name = "osdhub-manager"
+version = "0.1.0"
+edition = "2024"
+description = "Manages the games of an OSDHub device from a computer: title IDs, OPL art and ISO names"
+repository = "https://github.com/higorhgon/osdhub-manager"
+
+[dependencies]
+ureq = "3"
+
+# Small static binaries for the releases
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
