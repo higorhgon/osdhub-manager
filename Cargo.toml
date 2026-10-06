@@ -6,6 +6,8 @@ description = "Manages the games of an OSDHub device from a computer: title IDs,
 repository = "https://github.com/higorhgon/osdhub-manager"
 
 [dependencies]
+crossterm = "0.29"
+ratatui = "0.30.2"
 ureq = "3"
 
 # Small static binaries for the releases

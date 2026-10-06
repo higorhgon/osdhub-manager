@@ -29,6 +29,7 @@ impl fmt::Display for Console {
     }
 }
 
+#[derive(Clone)]
 pub struct Game {
     pub console: Console,
     /// The ISO file (PS2) or the game folder (PS1)

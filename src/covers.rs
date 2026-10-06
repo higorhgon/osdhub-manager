@@ -44,6 +44,7 @@ impl ArtType {
     }
 }
 
+#[derive(Clone)]
 pub struct Sources {
     /// OPL Manager's art database, None to skip it
     pub oplm_url: Option<String>,
@@ -171,7 +172,7 @@ impl Downloader {
 }
 
 /// The name of an existing `<ID>_<TYPE>.jpg/png` image in `art_dir`, matching without case
-fn existing_art(art_dir: &Path, id: &str, art: ArtType) -> Option<String> {
+pub fn existing_art(art_dir: &Path, id: &str, art: ArtType) -> Option<String> {
     let wanted: Vec<String> = EXTENSIONS
         .iter()
         .map(|ext| format!("{id}_{}.{ext}", art.suffix()).to_lowercase())

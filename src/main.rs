@@ -5,6 +5,7 @@ mod covers;
 mod disc;
 mod games;
 mod rename;
+mod tui;
 
 use covers::{ArtType, Downloader, Outcome, Sources};
 use games::{Console, Layout};
@@ -15,9 +16,11 @@ const USAGE: &str = "\
 osdhub-manager - manages the games of an OSDHub device from a computer
 
 USAGE:
+    osdhub-manager <DEVICE ROOT> [OPTIONS]            Opens the terminal interface
     osdhub-manager <COMMAND> <DEVICE ROOT> [OPTIONS]
 
 COMMANDS:
+    tui       Opens the terminal interface (the default)
     list      Lists the games with the title IDs read from their discs
     covers    Downloads the case covers and discs of the games into ART/ (<ID>_COV.jpg, <ID>_ICO.png...)
     rename    Renames the PS2 ISOs to OPL's <ID>.<name>.iso form (only shows the changes without --apply)
@@ -37,6 +40,7 @@ OPTIONS:
     -V, --version       Shows the version
 
 EXAMPLES:
+    osdhub-manager /run/media/$USER/MMCE
     osdhub-manager list /run/media/$USER/MMCE
     osdhub-manager covers /run/media/$USER/MMCE --ps1 --types cov
     osdhub-manager rename /run/media/$USER/MMCE --apply
@@ -118,10 +122,14 @@ fn parse_args() -> Result<Options, String> {
         }
     }
 
-    let [command, root] = positional.as_slice() else {
-        return Err("expected a command and the device root".to_string());
+    let (command, root) = match positional.as_slice() {
+        [root] => ("tui", root),
+        [command, root] => (command.as_str(), root),
+        _ => {
+            return Err("expected the device root, with an optional command before it".to_string());
+        }
     };
-    options.command = command.clone();
+    options.command = command.to_string();
     options.root = PathBuf::from(root);
     if !options.root.is_dir() {
         return Err(format!("{} is not a folder", options.root.display()));
@@ -278,6 +286,24 @@ fn main() -> ExitCode {
         }
     };
     match options.command.as_str() {
+        "tui" => {
+            let sources = Sources {
+                oplm_url: options.oplm_url.clone(),
+                xlenore: options.xlenore,
+            };
+            match tui::run(
+                options.root.clone(),
+                options.layout,
+                sources,
+                &options.consoles,
+            ) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         "list" => list(&options),
         "covers" => download_covers(&options),
         "rename" => rename_isos(&options),

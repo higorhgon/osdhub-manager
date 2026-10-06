@@ -1,7 +1,7 @@
 # osdhub-manager
 
 Manages the games of an [OSDHub](https://github.com/higorhgon/osdmenu) device from a computer (the SD card of an MMCE
-device, a USB drive...), so OPL Manager (Windows only) isn't needed:
+device, a USB drive...), so OPL Manager (Windows only) isn't needed, from a terminal interface or with commands:
 
 - **list** — the PS2 and PS1 games on the device, with the title IDs read from their discs
 - **covers** — downloads the case covers (`COV`) and discs (`ICO`) of the games into `ART/`, named like OPL does
@@ -12,13 +12,43 @@ device, a USB drive...), so OPL Manager (Windows only) isn't needed:
 It's a single executable without dependencies: download it from the
 [releases](https://github.com/higorhgon/osdhub-manager/releases) (Linux, Windows and macOS) and run it from a terminal.
 
-## Usage
+## Terminal interface
+
+```sh
+osdhub-manager /run/media/$USER/MMCE
+```
+
+The device root is the folder where the device is mounted, which holds the `CD`, `DVD`, `EMBER` and `ART` folders.
+The games are shown in a table with their title ID, whether their case cover (`COV`) and disc (`ICO`) are in `ART/`,
+and whether the PS2 ISOs have OPL's name (`✓`, `rename`, or `folder` for ISOs in their own subfolder):
+
+```
+┌ Games (5) ──────────────────────────────────────────────────────┐
+│      Title ID    COV ICO OPL    Name                             │
+│● PS2 SLUS_202.12 ✓   ✗   rename Bloody Roar 3                    │
+│  PS2 SCUS_973.28 ✓   ✓   ✓      Gran Turismo 4                   │
+│  PS1 SCUS_949.00 ✗   ✗   -      Crash Bandicoot (USA)            │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+| Key | |
+| --- | --- |
+| `↑` `↓` `PgUp` `PgDn` | Move |
+| `Space` / `a` | Mark the game / mark all (the actions apply to the marked games, or to all the games shown) |
+| `Tab` | All games, PS2 only or PS1 only |
+| `c` | Downloads the art of the games, in the background, with the progress in the log |
+| `t` / `f` | Art types to download (COV+ICO, COV, ICO) / downloads them again even when they're in `ART/` |
+| `r` | Renames the PS2 ISOs to OPL's names, after confirming |
+| `s` | Reads the games again |
+| `q` | Quits |
+
+## Commands
 
 ```
 osdhub-manager <COMMAND> <DEVICE ROOT> [OPTIONS]
 ```
 
-The device root is the folder where the device is mounted, which holds the `CD`, `DVD`, `EMBER` and `ART` folders.
+For scripts, the same actions are available as commands:
 
 ```sh
 # The games and their title IDs
@@ -79,5 +109,6 @@ Images already in `ART/` (as `.jpg` or `.png`) aren't downloaded again unless `-
 cargo build --release
 ```
 
-The only dependency is [ureq](https://github.com/algesten/ureq) (HTTPS with rustls), pinned by `Cargo.lock`. The release
+The dependencies are [ratatui](https://ratatui.rs) and crossterm (the terminal interface) and
+[ureq](https://github.com/algesten/ureq) (HTTPS with rustls), pinned by `Cargo.lock`. The release
 binaries are built by GitHub Actions when a `v*` tag is pushed: a static Linux binary (musl), Windows and macOS.
