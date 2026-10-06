@@ -3,9 +3,12 @@
 //! reporting to the log at the bottom, so the interface keeps responding.
 //! The art of the selected game is previewed on the right, as an image in terminals that show images
 //! (kitty's protocol, Sixel or iTerm2's), or with colored half blocks in the others.
+//! The names that don't fit on OSDHub's menu are shown with the part it cuts in yellow, and renaming an ISO
+//! opens an editor for its name, which warns when the name is too long for OSDHub.
 
 use crate::covers::{self, ArtType, Downloader, Outcome, Sources};
 use crate::games::{self, Console, Game, Layout};
+use crate::osdhub::Screen;
 use crate::rename::{self, Plan};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::layout::{Constraint, Flex, Layout as Split, Rect};
@@ -17,8 +20,8 @@ use ratatui_image::picker::Picker;
 use ratatui_image::picker::cap_parser::QueryStdioOptions;
 use ratatui_image::protocol::StatefulProtocol;
 use ratatui_image::{FilterType, Resize, StatefulImage};
-use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::collections::{BTreeSet, VecDeque};
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
@@ -79,8 +82,14 @@ struct App {
     log: Vec<String>,
     downloads: Option<Receiver<Message>>,
     progress: (usize, usize),
-    /// Renames waiting for confirmation
-    confirm: Option<Vec<(PathBuf, PathBuf)>>,
+    /// Where OSDHub draws the menu, for the names that don't fit
+    screen: Screen,
+    /// The name editor of the ISO being renamed
+    editor: Option<Editor>,
+    /// The games to rename after the one in the editor
+    rename_queue: VecDeque<usize>,
+    /// The ISOs renamed and the ones to rename, since `r` was pressed
+    rename_count: (usize, usize),
     quit: bool,
     /// Asks the terminal for its image support, or draws the images with half blocks
     query_images: bool,
@@ -97,6 +106,18 @@ enum Preview {
     Unreadable(String),
 }
 
+/// Edits the name of a PS2 ISO, between its title ID and its extension, which stay
+struct Editor {
+    game: usize,
+    parts: rename::Parts,
+    name: Vec<char>,
+    cursor: usize,
+    /// Which of the games being renamed this is, from 1
+    position: usize,
+    /// Why the last rename failed
+    error: Option<String>,
+}
+
 /// The preview is only shown when the terminal is at least this wide
 const PREVIEW_MIN_WIDTH: u16 = 100;
 const PREVIEW_WIDTH: u16 = 32;
@@ -107,6 +128,7 @@ pub fn run(
     sources: Sources,
     consoles: &[Console],
     query_images: bool,
+    screen: Screen,
 ) -> std::io::Result<()> {
     let filter = match consoles {
         [Console::Ps2] => Filter::Ps2,
@@ -127,7 +149,10 @@ pub fn run(
         log: Vec::new(),
         downloads: None,
         progress: (0, 0),
-        confirm: None,
+        screen,
+        editor: None,
+        rename_queue: VecDeque::new(),
+        rename_count: (0, 0),
         quit: false,
         query_images,
         picker: None,
@@ -258,12 +283,8 @@ impl App {
     }
 
     fn key(&mut self, code: KeyCode) {
-        if let Some(renames) = self.confirm.take() {
-            if matches!(code, KeyCode::Char('y') | KeyCode::Enter) {
-                self.apply_renames(renames);
-            } else {
-                self.log("Rename cancelled".to_string());
-            }
+        if self.editor.is_some() {
+            self.edit(code);
             return;
         }
         let rows = self.visible().len();
@@ -302,7 +323,7 @@ impl App {
             KeyCode::Char('t') => self.types = (self.types + 1) % TYPE_CHOICES.len(),
             KeyCode::Char('f') => self.force = !self.force,
             KeyCode::Char('c') => self.start_downloads(),
-            KeyCode::Char('r') => self.plan_renames(),
+            KeyCode::Char('r') => self.start_renames(),
             KeyCode::Char('s') if self.downloads.is_none() => self.rescan(),
             _ => {}
         }
@@ -373,40 +394,132 @@ impl App {
         });
     }
 
-    fn plan_renames(&mut self) {
-        let mut renames = Vec::new();
-        for i in self.targets() {
-            if self.games[i].console != Console::Ps2 {
-                continue;
-            }
-            match rename::plan(&self.games[i]) {
-                Plan::Rename { from, to } => renames.push((from, to)),
-                Plan::Skip(reason) => {
-                    let line = format!("{}: not renamed, {reason}", self.games[i].name);
+    /// Opens the name editor for the marked PS2 ISOs, one after the other, or for the selected one
+    fn start_renames(&mut self) {
+        let visible = self.visible();
+        let marked: Vec<usize> = visible
+            .iter()
+            .copied()
+            .filter(|i| self.marked.contains(i))
+            .collect();
+        let games = if marked.is_empty() {
+            self.selected().into_iter().collect()
+        } else {
+            marked
+        };
+        self.rename_queue = games
+            .into_iter()
+            .filter(|&i| self.games[i].console == Console::Ps2)
+            .collect();
+        if self.rename_queue.is_empty() {
+            self.log("Select or mark the PS2 ISOs to rename".to_string());
+            return;
+        }
+        self.rename_count = (0, self.rename_queue.len());
+        self.next_rename(0);
+    }
+
+    /// Opens the editor for the next game to rename, after `done` games, or ends the renames
+    fn next_rename(&mut self, done: usize) {
+        self.editor = None;
+        let mut position = done;
+        while let Some(game) = self.rename_queue.pop_front() {
+            position += 1;
+            match rename::parts(&self.games[game]) {
+                Ok(parts) => {
+                    let name: Vec<char> = parts.name.chars().collect();
+                    self.editor = Some(Editor {
+                        game,
+                        cursor: name.len(),
+                        name,
+                        parts,
+                        position,
+                        error: None,
+                    });
+                    return;
+                }
+                Err(reason) => {
+                    let line = format!("{}: not renamed, {reason}", self.games[game].name);
                     self.log(line);
                 }
-                Plan::AlreadyNamed => {}
             }
         }
-        if renames.is_empty() {
-            self.log("No PS2 ISOs to rename".to_string());
-        } else {
-            self.confirm = Some(renames);
+        let renamed = self.rename_count.0;
+        if renamed > 0 {
+            self.log(format!(
+                "{renamed} ISO(s) renamed. Refresh the Games list in OSDHub, since the paths changed."
+            ));
         }
     }
 
-    fn apply_renames(&mut self, renames: Vec<(PathBuf, PathBuf)>) {
-        let mut renamed = 0;
-        for (from, to) in &renames {
-            match rename::apply(from, to) {
-                Ok(()) => renamed += 1,
-                Err(e) => self.log(format!("{}: {e}", from.display())),
+    fn edit(&mut self, code: KeyCode) {
+        let Some(editor) = &mut self.editor else {
+            return;
+        };
+        editor.error = None;
+        match code {
+            KeyCode::Enter => self.rename_edited(),
+            KeyCode::Tab => {
+                let (position, name) = (editor.position, self.games[editor.game].name.clone());
+                self.log(format!("{name}: skipped"));
+                self.next_rename(position);
             }
+            KeyCode::Esc => {
+                self.rename_queue.clear();
+                self.log("Rename cancelled".to_string());
+                self.next_rename(0);
+            }
+            KeyCode::Char(c) => {
+                editor.name.insert(editor.cursor, c);
+                editor.cursor += 1;
+            }
+            KeyCode::Backspace if editor.cursor > 0 => {
+                editor.cursor -= 1;
+                editor.name.remove(editor.cursor);
+            }
+            KeyCode::Delete if editor.cursor < editor.name.len() => {
+                editor.name.remove(editor.cursor);
+            }
+            KeyCode::Left => editor.cursor = editor.cursor.saturating_sub(1),
+            KeyCode::Right => editor.cursor = (editor.cursor + 1).min(editor.name.len()),
+            KeyCode::Home => editor.cursor = 0,
+            KeyCode::End => editor.cursor = editor.name.len(),
+            _ => {}
         }
-        self.log(format!(
-            "{renamed} ISO(s) renamed. Refresh the Games list in OSDHub, since the paths changed."
-        ));
-        self.rescan();
+    }
+
+    /// Renames the ISO in the editor to the edited name
+    fn rename_edited(&mut self) {
+        let Some(editor) = &mut self.editor else {
+            return;
+        };
+        let game = &mut self.games[editor.game];
+        let name: String = editor.name.iter().collect();
+        let line = match rename::target(game, &editor.parts, &name) {
+            Err(e) => {
+                editor.error = Some(e);
+                return;
+            }
+            Ok(None) => format!("{}: unchanged", rename::file_name(&game.path)),
+            Ok(Some(to)) => {
+                if let Err(e) = rename::apply(&game.path, &to) {
+                    editor.error = Some(e);
+                    return;
+                }
+                let line = format!(
+                    "{} → {}",
+                    rename::file_name(&game.path),
+                    rename::file_name(&to)
+                );
+                game.name = games::display_name(&rename::file_name(&to));
+                game.path = to;
+                self.rename_count.0 += 1;
+                line
+            }
+        };
+        let position = editor.position;
+        self.log(line);
+        self.next_rename(position);
     }
 
     fn draw(&mut self, frame: &mut Frame) {
@@ -430,13 +543,13 @@ impl App {
         self.draw_log(frame, log);
         frame.render_widget(
             Paragraph::new(
-                "↑↓ move  Space mark  a mark all  Tab PS2/PS1  c download art  t types  f force  r rename PS2 ISOs  s rescan  q quit",
+                "↑↓ move  Space mark  a mark all  Tab PS2/PS1  c download art  t types  f force  r rename PS2 ISO  s rescan  q quit",
             )
             .dark_gray(),
             help,
         );
-        if let Some(renames) = &self.confirm {
-            draw_confirm(frame, renames);
+        if let Some(editor) = &self.editor {
+            self.draw_editor(frame, editor);
         }
     }
 
@@ -584,7 +697,7 @@ impl App {
                     art_cell(&self.art[i][0]),
                     art_cell(&self.art[i][1]),
                     opl,
-                    Cell::from(game.name.clone()),
+                    Cell::from(self.name_line(&game.name)),
                 ])
             })
             .collect();
@@ -610,6 +723,85 @@ impl App {
         frame.render_stateful_widget(table, area, &mut self.table);
     }
 
+    /// A game name with the part OSDHub doesn't show in yellow
+    fn name_line(&self, name: &str) -> Line<'static> {
+        let visible = self.screen.visible_chars(name);
+        let shown: String = name.chars().take(visible).collect();
+        let cut: String = name.chars().skip(visible).collect();
+        Line::from(vec![Span::from(shown), Span::from(cut).yellow()])
+    }
+
+    fn draw_editor(&self, frame: &mut Frame, editor: &Editor) {
+        let [area] = Split::vertical([Constraint::Length(12)])
+            .flex(Flex::Center)
+            .areas(frame.area());
+        let [area] = Split::horizontal([Constraint::Percentage(90)])
+            .flex(Flex::Center)
+            .areas(area);
+        let game = &self.games[editor.game];
+        let name: String = editor.name.iter().collect();
+        let count = name.trim().chars().count();
+        // The leading spaces aren't kept, so the cut is counted from the first character kept
+        let leading = name.chars().take_while(|c| *c == ' ').count();
+        let visible = leading + self.screen.visible_chars(name.trim());
+
+        // The title ID and the extension can't be edited; the characters OSDHub doesn't show are in yellow
+        let mut input = vec![Span::from(format!("{}.", editor.parts.id)).cyan()];
+        for (i, c) in editor.name.iter().enumerate() {
+            let mut span = Span::from(c.to_string());
+            if i >= visible {
+                span = span.yellow();
+            }
+            if i == editor.cursor {
+                span = span.reversed();
+            }
+            input.push(span);
+        }
+        if editor.cursor == editor.name.len() {
+            input.push(Span::from(" ").reversed());
+        }
+        input.push(Span::from(editor.parts.ext.clone()).cyan());
+
+        let status = match (rename::check_name(&name), self.screen.warning(name.trim())) {
+            (Err(e), _) => Line::from(format!("✗ {e}")).red(),
+            (Ok(()), Some(warning)) => Line::from(format!("⚠ {warning}")).yellow(),
+            (Ok(()), None) => {
+                Line::from(format!("✓ Fits on OSDHub's menu ({count} characters)")).green()
+            }
+        };
+        let error = match &editor.error {
+            Some(e) => Line::from(format!("✗ {e}")).red(),
+            None => Line::from(""),
+        };
+        let covers = if self.screen.covers { "on" } else { "off" };
+        let lines = vec![
+            Line::from(format!("Now: {}", rename::file_name(&game.path))).dark_gray(),
+            Line::from(""),
+            Line::from(input),
+            Line::from(""),
+            status,
+            error,
+            Line::from(""),
+            Line::from("Enter rename   Tab skip   Esc cancel   ←→ Home End move").bold(),
+            Line::from(format!(
+                "OSDHub menu_x {}, covers {covers} (--menu-x, --no-covers)",
+                self.screen.menu_x
+            ))
+            .dark_gray(),
+        ];
+        let title = format!(
+            " Rename {} ({} of {}) ",
+            editor.parts.id, editor.position, self.rename_count.1
+        );
+        frame.render_widget(Clear, area);
+        frame.render_widget(
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: false })
+                .block(Block::bordered().title(title)),
+            area,
+        );
+    }
+
     fn draw_log(&self, frame: &mut Frame, area: Rect) {
         let height = area.height.saturating_sub(2) as usize;
         let lines: Vec<Line> = self
@@ -625,35 +817,6 @@ impl App {
             area,
         );
     }
-}
-
-fn draw_confirm(frame: &mut Frame, renames: &[(PathBuf, PathBuf)]) {
-    let height = (renames.len() as u16 + 4).min(frame.area().height.saturating_sub(2));
-    let [area] = Split::vertical([Constraint::Length(height)])
-        .flex(Flex::Center)
-        .areas(frame.area());
-    let [area] = Split::horizontal([Constraint::Percentage(90)])
-        .flex(Flex::Center)
-        .areas(area);
-    let name = |p: &Path| {
-        p.file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default()
-    };
-    let mut lines: Vec<Line> = renames
-        .iter()
-        .map(|(from, to)| Line::from(format!("{} → {}", name(from), name(to))))
-        .collect();
-    lines.push(Line::from(""));
-    lines.push(Line::from("Enter/y rename   any other key cancels").bold());
-    frame.render_widget(Clear, area);
-    frame.render_widget(
-        Paragraph::new(lines).block(Block::bordered().title(format!(
-            " Rename {} PS2 ISO(s) to OPL's names? ",
-            renames.len()
-        ))),
-        area,
-    );
 }
 
 #[cfg(test)]
@@ -750,7 +913,13 @@ mod tests {
             log: vec!["5 games found, 4 with a title ID".into()],
             downloads: None,
             progress: (0, 0),
-            confirm: None,
+            screen: Screen {
+                menu_x: 400,
+                covers: true,
+            },
+            editor: None,
+            rename_queue: VecDeque::new(),
+            rename_count: (0, 0),
             quit: false,
             query_images: false,
             picker: Some(Picker::halfblocks()),
@@ -817,17 +986,102 @@ mod tests {
         app.key(KeyCode::Char('t'));
         assert_eq!(TYPE_CHOICES[app.types], &[ArtType::Cov]);
 
-        // Renaming the marked game asks first, and any other key cancels
+        // Renaming the marked game opens the editor, and Esc cancels
         app.key(KeyCode::Char('r'));
-        let renames = app.confirm.clone().unwrap();
-        assert_eq!(renames.len(), 1);
-        assert!(renames[0].1.ends_with("SLUS_202.12.Bloody Roar 3.iso"));
+        let editor = app.editor.as_ref().unwrap();
+        assert_eq!(editor.game, 0);
+        assert_eq!(editor.name.iter().collect::<String>(), "Bloody Roar 3");
         let (screen, _) = render(&mut app);
         println!("{screen}");
-        assert!(screen.contains("Rename 1 PS2 ISO(s)"));
-        app.key(KeyCode::Char('n'));
-        assert!(app.confirm.is_none());
+        assert!(screen.contains("Rename SLUS_202.12 (1 of 1)"));
+        assert!(screen.contains("SLUS_202.12.Bloody Roar 3 .iso"));
+        assert!(screen.contains("Fits on OSDHub"));
+        app.key(KeyCode::Char('q')); // Typed into the name
+        assert!(!app.quit);
+        app.key(KeyCode::Esc);
+        assert!(app.editor.is_none());
         app.key(KeyCode::Char('q'));
         assert!(app.quit);
+    }
+
+    #[test]
+    fn rename() {
+        let dir =
+            std::env::temp_dir().join(format!("osdhub-manager-tui-rename-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let long = "HARVEST MOON - SAVE THE HOMELAND";
+        std::fs::write(dir.join(format!("{long}.iso")), b"").unwrap();
+        let mut app = app();
+        app.games[0] = Game {
+            path: dir.join(format!("{long}.iso")),
+            name: long.to_string(),
+            ..app.games[0].clone()
+        };
+        app.marked.extend([0, 2, 3]);
+
+        // The name is too long for OSDHub with covers: the cut part is in yellow, in the table and the editor
+        let (_, buffer) = render(&mut app);
+        let row = (0..buffer.area.height)
+            .find(|&y| {
+                let line: String = (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect();
+                line.contains(long)
+            })
+            .unwrap();
+        let line: Vec<&str> = (0..buffer.area.width)
+            .map(|x| buffer[(x, row)].symbol())
+            .collect();
+        let start = (0..line.len())
+            .find(|&x| line[x..].concat().starts_with(long))
+            .unwrap() as u16;
+        assert_ne!(buffer[(start, row)].fg, Color::Yellow);
+        assert_eq!(
+            buffer[(start + long.len() as u16 - 1, row)].fg,
+            Color::Yellow
+        );
+        app.key(KeyCode::Char('r'));
+        let (screen, _) = render(&mut app);
+        println!("{screen}");
+        assert!(screen.contains("1 of 2"));
+        assert!(screen.contains("⚠ OSDHub shows \"HARVEST MOON"));
+
+        // Only the name is edited: the title ID and the extension stay
+        app.key(KeyCode::Home);
+        for _ in 0.."HARVEST MOON - ".len() {
+            app.key(KeyCode::Delete);
+        }
+        app.key(KeyCode::End);
+        for c in " - The Legend of Harvest Moon".chars() {
+            app.key(KeyCode::Char(c));
+        }
+        let (screen, _) = render(&mut app);
+        assert!(screen.contains("SLUS_202.12.SAVE THE HOMELAND - The Legend of Harvest Moon .iso"));
+        assert!(screen.contains("⚠"));
+        for _ in 0.." - The Legend of Harvest Moon".len() {
+            app.key(KeyCode::Backspace);
+        }
+        let (screen, _) = render(&mut app);
+        assert!(screen.contains("✓ Fits on OSDHub's menu (17 characters)"));
+
+        // An invalid name isn't renamed
+        app.key(KeyCode::Char('?'));
+        app.key(KeyCode::Enter);
+        assert!(app.editor.as_ref().unwrap().error.is_some());
+        app.key(KeyCode::Backspace);
+
+        // Enter renames and goes on to the next game: the folder game can't be renamed (and the PS1 game
+        // isn't one of them), so the renames end
+        app.key(KeyCode::Enter);
+        assert!(app.editor.is_none());
+        assert!(dir.join("SLUS_202.12.SAVE THE HOMELAND.iso").exists());
+        assert_eq!(app.games[0].name, "SAVE THE HOMELAND");
+        assert!(
+            app.log
+                .iter()
+                .any(|l| l.contains("Folder Game: not renamed"))
+        );
+        assert!(app.log.iter().any(|l| l.contains("1 ISO(s) renamed")));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

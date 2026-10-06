@@ -43,9 +43,25 @@ one it supports when the interface opens; `--no-images` skips that and uses half
 | `Tab` | All games, PS2 only or PS1 only |
 | `c` | Downloads the art of the games, in the background, with the progress in the log |
 | `t` / `f` | Art types to download (COV+ICO, COV, ICO) / downloads them again even when they're in `ART/` |
-| `r` | Renames the PS2 ISOs to OPL's names, after confirming |
+| `r` | Renames the selected PS2 ISO, or the marked ones one after the other, in a name editor (below) |
 | `s` | Reads the games again |
 | `q` | Quits |
+
+### Renaming ISOs
+
+`r` opens an editor for the name of the ISO, which only edits the name: the title ID before it and the extension
+after it stay (`SLUS_202.12.` `Bloody Roar 3` `.iso`), so the file always gets OPL's form. `Enter` renames it,
+`Tab` skips it and `Esc` stops renaming.
+
+While the name is edited, the editor shows whether it fits on OSDHub's menu. OSDHub shortens the names that don't
+fit between the cover panel and the right edge of the screen with `...`, so the editor shows the name as OSDHub would
+(`⚠ OSDHub shows "HARVEST MOON - SAVE THE HOME..."`) and the characters it cuts in yellow, like the game table does.
+The width of a name is estimated from the widths of OSDSYS's font, for the menu position given with `--menu-x`
+(OSDHub's `OSDSYS_menu_x`, 400 by default) and with the cover panel (`--no-covers` when `games_covers = 0`, which
+leaves the whole width of the screen for the names). OSDHub also keeps only the first 79 characters of a name.
+
+The editor doesn't accept names that OPL wouldn't list (over 160 characters) or that FAT and exFAT don't allow
+(`/ \ : * ? " < > |`), nor the name of another ISO.
 
 ## Commands
 
@@ -65,7 +81,7 @@ osdhub-manager covers /run/media/$USER/MMCE
 # Only the PS1 case covers, showing what would be downloaded first
 osdhub-manager covers /run/media/$USER/MMCE --ps1 --types cov --dry-run
 
-# Shows how the PS2 ISOs would be renamed, then renames them
+# Shows how the PS2 ISOs would be renamed (and the names that don't fit on OSDHub), then renames them
 osdhub-manager rename /run/media/$USER/MMCE
 osdhub-manager rename /run/media/$USER/MMCE --apply
 ```
@@ -84,6 +100,8 @@ covers and picks up the new ISO paths.
 | `--oplm-url URL` | OPL Manager's art database (`none` to skip it) |
 | `--no-xlenore` | Doesn't use xlenore's cover collections |
 | `--no-images` | Draws the art previews with colored half blocks instead of asking the terminal for images |
+| `--menu-x N` | Center of OSDHub's menu (`OSDSYS_menu_x`, 400 by default), to find the names that don't fit |
+| `--no-covers` | OSDHub doesn't show covers (`games_covers = 0`), which leaves more room for the names |
 
 ## Games
 

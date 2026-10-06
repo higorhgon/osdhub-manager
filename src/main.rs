@@ -4,11 +4,13 @@
 mod covers;
 mod disc;
 mod games;
+mod osdhub;
 mod rename;
 mod tui;
 
 use covers::{ArtType, Downloader, Outcome, Sources};
 use games::{Console, Layout};
+use osdhub::Screen;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -37,6 +39,8 @@ OPTIONS:
     --oplm-url <URL>    OPL Manager art database (default: the archive.org backup), \"none\" to skip it
     --no-xlenore        Doesn't use xlenore's cover collections
     --no-images         Draws the art previews with colored half blocks instead of asking the terminal for images
+    --menu-x <N>        Center of OSDHub's menu, like OSDSYS_menu_x (default: 400), for the names that don't fit
+    --no-covers         OSDHub doesn't show covers (games_covers = 0), which leaves more room for the names
     -h, --help          Shows this help
     -V, --version       Shows the version
 
@@ -59,6 +63,7 @@ struct Options {
     oplm_url: Option<String>,
     xlenore: bool,
     images: bool,
+    screen: Screen,
 }
 
 fn parse_args() -> Result<Options, String> {
@@ -80,6 +85,10 @@ fn parse_args() -> Result<Options, String> {
         oplm_url: Some(covers::DEFAULT_OPLM_URL.to_string()),
         xlenore: true,
         images: true,
+        screen: Screen {
+            menu_x: 400,
+            covers: true,
+        },
     };
 
     while let Some(arg) = args.next() {
@@ -100,6 +109,15 @@ fn parse_args() -> Result<Options, String> {
             "--apply" => options.apply = true,
             "--no-xlenore" => options.xlenore = false,
             "--no-images" => options.images = false,
+            "--no-covers" => options.screen.covers = false,
+            "--menu-x" => {
+                let x = value("--menu-x")?;
+                options.screen.menu_x = x
+                    .parse()
+                    .ok()
+                    .filter(|x| (0..=640).contains(x))
+                    .ok_or(format!("--menu-x needs a number from 0 to 640, not {x}"))?;
+            }
             "--types" => {
                 let list = value("--types")?;
                 options.types = list
@@ -161,6 +179,9 @@ fn list(options: &Options) -> ExitCode {
             _ => String::new(),
         };
         println!("{}  {id}  {}{note}", game.console, game.name);
+        if let Some(warning) = options.screen.warning(&game.name) {
+            println!("     ⚠ {warning}");
+        }
     }
     println!("{} game(s)", games.len());
     ExitCode::SUCCESS
@@ -238,16 +259,17 @@ fn download_covers(options: &Options) -> ExitCode {
 
 fn rename_isos(options: &Options) -> ExitCode {
     let games = games::scan(&options.root, &options.layout, &[Console::Ps2]);
-    let (mut renamed, mut failed) = (0, 0);
+    let (mut renamed, mut failed, mut cut) = (0, 0, 0);
     for game in &games {
+        if let Some(warning) = options.screen.warning(&game.name) {
+            println!("warn  {}: {warning}", game.path.display());
+            cut += 1;
+        }
         match rename::plan(game) {
             rename::Plan::AlreadyNamed => {}
             rename::Plan::Skip(reason) => println!("skip  {}: {reason}", game.path.display()),
             rename::Plan::Rename { from, to } => {
-                let to_name = to
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
+                let to_name = rename::file_name(&to);
                 if !options.apply {
                     println!("would rename  {} -> {to_name}", from.display());
                     renamed += 1;
@@ -273,6 +295,11 @@ fn rename_isos(options: &Options) -> ExitCode {
         }
     } else {
         println!("{renamed} to rename. Run again with --apply to rename them.");
+    }
+    if cut > 0 {
+        println!(
+            "{cut} name(s) don't fit on OSDHub's menu: edit them with r in the terminal interface."
+        );
     }
     if failed > 0 {
         ExitCode::FAILURE
@@ -301,6 +328,7 @@ fn main() -> ExitCode {
                 sources,
                 &options.consoles,
                 options.images,
+                options.screen,
             ) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
