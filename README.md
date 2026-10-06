@@ -1,0 +1,1 @@
+# osdhub-manager
