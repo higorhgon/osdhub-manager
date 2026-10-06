@@ -1069,17 +1069,23 @@ mod tests {
         }
     }
 
-    /// A device root with a red COV and a blue ICO for SLUS_202.12 in ART/
+    /// A device root with a red COV and a blue ICO for SLUS_202.12 in ART/, written once for all the tests,
+    /// which run at the same time
     fn root_with_art() -> PathBuf {
-        let root = std::env::temp_dir().join(format!("osdhub-manager-tui-{}", std::process::id()));
-        std::fs::create_dir_all(root.join("ART")).unwrap();
-        image::RgbImage::from_pixel(64, 90, image::Rgb([200, 30, 30]))
-            .save(root.join("ART/SLUS_202.12_COV.png"))
-            .unwrap();
-        image::RgbImage::from_pixel(64, 64, image::Rgb([30, 30, 200]))
-            .save(root.join("ART/SLUS_202.12_ICO.png"))
-            .unwrap();
-        root
+        static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+        ROOT.get_or_init(|| {
+            let root =
+                std::env::temp_dir().join(format!("osdhub-manager-tui-{}", std::process::id()));
+            std::fs::create_dir_all(root.join("ART")).unwrap();
+            image::RgbImage::from_pixel(64, 90, image::Rgb([200, 30, 30]))
+                .save(root.join("ART/SLUS_202.12_COV.png"))
+                .unwrap();
+            image::RgbImage::from_pixel(64, 64, image::Rgb([30, 30, 200]))
+                .save(root.join("ART/SLUS_202.12_ICO.png"))
+                .unwrap();
+            root
+        })
+        .clone()
     }
 
     fn app() -> App {
