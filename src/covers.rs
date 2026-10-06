@@ -73,12 +73,8 @@ pub struct Downloader {
 
 impl Downloader {
     pub fn new(sources: Sources) -> Downloader {
-        let config = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(60)))
-            .user_agent(concat!("osdhub-manager/", env!("CARGO_PKG_VERSION")))
-            .build();
         Downloader {
-            agent: config.into(),
+            agent: crate::net::agent(Duration::from_secs(60)),
             sources,
         }
     }

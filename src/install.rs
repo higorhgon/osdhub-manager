@@ -111,11 +111,7 @@ struct Release {
 }
 
 fn agent() -> ureq::Agent {
-    ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(300)))
-        .user_agent(concat!("osdhub-manager/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .into()
+    crate::net::agent(Duration::from_secs(300))
 }
 
 fn releases(agent: &ureq::Agent, repo: &str) -> Result<Vec<Release>, String> {
@@ -160,16 +156,35 @@ fn releases(agent: &ureq::Agent, repo: &str) -> Result<Vec<Release>, String> {
         .collect())
 }
 
+/// Downloads `url`, following the redirects by their Location header without reading their bodies (the release
+/// downloads redirect from github.com to GitHub's storage, and the body of that redirect can't always be read)
 fn download(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, String> {
-    agent
-        .get(url)
-        .call()
-        .map_err(|e| format!("{url}: {e}"))?
-        .body_mut()
-        .with_config()
-        .limit(256 * 1024 * 1024)
-        .read_to_vec()
-        .map_err(|e| format!("{url}: {e}"))
+    let mut url = url.to_string();
+    for _ in 0..5 {
+        let mut response = agent
+            .get(&url)
+            .config()
+            .max_redirects(0)
+            .build()
+            .call()
+            .map_err(|e| format!("{url}: {e}"))?;
+        if response.status().is_redirection() {
+            url = response
+                .headers()
+                .get("location")
+                .and_then(|l| l.to_str().ok())
+                .ok_or(format!("{url}: a redirect without a location"))?
+                .to_string();
+            continue;
+        }
+        return response
+            .body_mut()
+            .with_config()
+            .limit(256 * 1024 * 1024)
+            .read_to_vec()
+            .map_err(|e| format!("{url}: {e}"));
+    }
+    Err(format!("{url}: too many redirects"))
 }
 
 /// The files in a zip archive, as (path, contents)

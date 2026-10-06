@@ -11,6 +11,7 @@ mod games;
 mod install;
 mod install_modal;
 mod memcard;
+mod net;
 mod osdhub;
 mod rename;
 mod search;
