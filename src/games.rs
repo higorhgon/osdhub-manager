@@ -14,7 +14,7 @@ pub enum Console {
 }
 
 impl Console {
-    /// The folder of the console in OPL Manager's art archive
+    /// The folder of the console in OPL Manager's art database
     pub fn art_folder(self) -> &'static str {
         match self {
             Console::Ps1 => "PS1",

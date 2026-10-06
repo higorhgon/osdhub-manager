@@ -1,8 +1,8 @@
 //! Downloads OPL ART images (`ART/<title ID>_COV.jpg`, `_ICO.png`...) for the games found on a device.
 //!
 //! Sources, tried in order:
-//! - OPL Manager's art database, whose backups are on archive.org (`PS1/<ID>/<ID>_COV.jpg`, `PS2/...`),
-//!   with every OPL art type, including the disc (`ICO`)
+//! - OPL Manager's art database, from its dump on GitHub (`PS1/<ID>/<ID>_COV.png`, `PS2/...`),
+//!   with every OPL art type, including the disc (`ICO`); its backup on archive.org has the same layout
 //! - xlenore's PS1 and PS2 cover collections on GitHub (`covers/default/SLUS-20212.jpg`), case covers only
 
 use crate::games::{Console, Game};
@@ -11,14 +11,17 @@ use std::io;
 use std::path::Path;
 use std::time::Duration;
 
-/// OPL Manager's art database backup on archive.org; files inside the zip are downloaded one by one
+/// The dump of OPL Manager's art database on GitHub, whose images are PNG.
+/// Its backup on archive.org works too, as the files inside its zip are downloaded one by one:
+/// https://archive.org/download/OPLM_ART_2024_09/OPLM_ART_2024_09.zip
 pub const DEFAULT_OPLM_URL: &str =
-    "https://archive.org/download/OPLM_ART_2024_09/OPLM_ART_2024_09.zip";
+    "https://raw.githubusercontent.com/Luden02/psx-ps2-opl-art-database/main";
 const XLENORE_PS1_URL: &str =
     "https://raw.githubusercontent.com/xlenore/psx-covers/main/covers/default";
 const XLENORE_PS2_URL: &str =
     "https://raw.githubusercontent.com/xlenore/ps2-covers/main/covers/default";
-const EXTENSIONS: [&str; 2] = ["jpg", "png"];
+/// Tried in this order: OPL Manager's images are mostly PNG
+const EXTENSIONS: [&str; 2] = ["png", "jpg"];
 
 /// OPL art types: the case cover and the disc are the ones OSDHub shows
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

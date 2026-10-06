@@ -36,7 +36,7 @@ OPTIONS:
     --apply             Renames the ISOs (rename)
     --cd-folder <DIR>   PS2 CD folder (default: CD), like games_cd_folder
     --dvd-folder <DIR>  PS2 DVD folder (default: DVD), like games_dvd_folder
-    --oplm-url <URL>    OPL Manager art database (default: the archive.org backup), \"none\" to skip it
+    --oplm-url <URL>    OPL Manager art database (default: its dump on GitHub), \"none\" to skip it
     --no-xlenore        Doesn't use xlenore's cover collections
     --no-images         Draws the art previews with colored half blocks instead of asking the terminal for images
     --menu-x <N>        Center of OSDHub's menu, like OSDSYS_menu_x (default: 400), for the names that don't fit
