@@ -2,9 +2,13 @@
 //! (the SD card of an MMCE device, a USB drive...), without OPL Manager.
 
 mod browse;
+mod cnf;
+mod config;
+mod config_tab;
 mod covers;
 mod disc;
 mod games;
+mod memcard;
 mod osdhub;
 mod rename;
 mod search;
@@ -29,6 +33,8 @@ COMMANDS:
     list      Lists the games with the title IDs read from their discs
     covers    Downloads the case covers and discs of the games into ART/ (<ID>_COV.jpg, <ID>_ICO.png...)
     rename    Renames the PS2 ISOs to OPL's <ID>.<name>.iso form (only shows the changes without --apply)
+    config    Shows OSDMenu's configuration (SYS-CONF/OSDMENU.CNF inside the device's BOOT memory card, or the
+              memory card image or .cnf file given instead of the device root), exports it or imports it
 
 OPTIONS:
     --ps1               Only PS1 games (EMBER/games/<game>/ with a .cue file)
@@ -44,6 +50,9 @@ OPTIONS:
     --no-images         Draws the art previews with colored half blocks instead of asking the terminal for images
     --menu-x <N>        Center of OSDHub's menu, like OSDSYS_menu_x (default: 400), for the names that don't fit
     --no-covers         OSDHub doesn't show covers (games_covers = 0), which leaves more room for the names
+    --export <FILE>     Writes the configuration to FILE, to edit it (config)
+    --import <FILE>     Saves FILE as the configuration, after showing the changes and asking (config)
+    --yes               Doesn't ask before saving (config --import)
     -h, --help          Shows this help
     -V, --version       Shows the version
 
@@ -52,6 +61,8 @@ EXAMPLES:
     osdhub-manager list /run/media/$USER/MMCE
     osdhub-manager covers /run/media/$USER/MMCE --ps1 --types cov
     osdhub-manager rename /run/media/$USER/MMCE --apply
+    osdhub-manager config /run/media/$USER/MMCE --export OSDMENU.CNF
+    osdhub-manager config /run/media/$USER/MMCE --import OSDMENU.CNF
 ";
 
 struct Options {
@@ -68,6 +79,9 @@ struct Options {
     xlenore: bool,
     images: bool,
     screen: Screen,
+    export: Option<PathBuf>,
+    import: Option<PathBuf>,
+    yes: bool,
 }
 
 fn parse_args() -> Result<Options, String> {
@@ -93,6 +107,9 @@ fn parse_args() -> Result<Options, String> {
             menu_x: 400,
             covers: true,
         },
+        export: None,
+        import: None,
+        yes: false,
     };
 
     while let Some(arg) = args.next() {
@@ -114,6 +131,9 @@ fn parse_args() -> Result<Options, String> {
             "--no-xlenore" => options.xlenore = false,
             "--no-images" => options.images = false,
             "--no-covers" => options.screen.covers = false,
+            "--yes" | "-y" => options.yes = true,
+            "--export" => options.export = Some(PathBuf::from(value("--export")?)),
+            "--import" => options.import = Some(PathBuf::from(value("--import")?)),
             "--menu-x" => {
                 let x = value("--menu-x")?;
                 options.screen.menu_x = x
@@ -148,7 +168,7 @@ fn parse_args() -> Result<Options, String> {
         }
     }
 
-    const COMMANDS: [&str; 4] = ["tui", "list", "covers", "rename"];
+    const COMMANDS: [&str; 5] = ["tui", "list", "covers", "rename", "config"];
     let (command, root) = match positional.as_slice() {
         [] => ("tui", None),
         [command] if COMMANDS.contains(&command.as_str()) && !Path::new(command).is_dir() => {
@@ -163,7 +183,8 @@ fn parse_args() -> Result<Options, String> {
     options.command = command.to_string();
     if let Some(root) = root {
         let root = PathBuf::from(root);
-        if !root.is_dir() {
+        // config also takes a memory card image or a .cnf file
+        if !(root.is_dir() || command == "config" && root.is_file()) {
             return Err(format!("{} is not a folder", root.display()));
         }
         options.root = Some(root);
@@ -330,6 +351,123 @@ fn rename_isos(options: &Options) -> ExitCode {
     }
 }
 
+/// Where the configuration is: the file given, or the BOOT memory card of the device with OSDMENU.CNF
+/// (or the only one, where it's created)
+fn config_source(root: &Path) -> Result<config::Source, String> {
+    if root.is_file() {
+        return Ok(config::Source::of(root));
+    }
+    let cards = config::find_cards(root);
+    if let Some(card) = cards.iter().find(|c| c.cnf == Ok(true)) {
+        return Ok(config::Source::Card(card.path.clone()));
+    }
+    let readable: Vec<_> = cards.iter().filter(|c| c.cnf.is_ok()).collect();
+    match readable.as_slice() {
+        [card] => Ok(config::Source::Card(card.path.clone())),
+        [] => Err(format!(
+            "no memory card image in {}/MemoryCards/**/BOOT/; give the image or the .cnf file instead",
+            root.display()
+        )),
+        _ => Err(
+            "more than one BOOT memory card without OSDMENU.CNF; give the image instead"
+                .to_string(),
+        ),
+    }
+}
+
+fn show_config(options: &Options) -> ExitCode {
+    let source = match config_source(device_root(options)) {
+        Ok(source) => source,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let original = match config::load(&source) {
+        Ok(text) => text,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(import) = &options.import else {
+        if let Some(export) = &options.export {
+            return match std::fs::write(export, &original) {
+                Ok(()) => {
+                    println!("{} written from {}", export.display(), source.describe());
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("error: {}: {e}", export.display());
+                    ExitCode::FAILURE
+                }
+            };
+        }
+        println!("# {}", source.describe());
+        print!("{original}");
+        for (line, problem) in cnf::problems(&cnf::Cnf::parse(&original)) {
+            eprintln!("warning: line {}: {problem}", line + 1);
+        }
+        return ExitCode::SUCCESS;
+    };
+
+    let new = match std::fs::read(import).map(String::from_utf8) {
+        Ok(Ok(text)) => text,
+        Ok(Err(_)) => {
+            eprintln!("error: {} isn't UTF-8 text", import.display());
+            return ExitCode::FAILURE;
+        }
+        Err(e) => {
+            eprintln!("error: {}: {e}", import.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let changes = cnf::diff(&original, &new);
+    if changes.is_empty() {
+        println!(
+            "{} is the same as the configuration in {}",
+            import.display(),
+            source.describe()
+        );
+        return ExitCode::SUCCESS;
+    }
+    println!("Changes to {}:", source.describe());
+    for (old, new) in &changes {
+        if let Some(old) = old {
+            println!("  - {old}");
+        }
+        if let Some(new) = new {
+            println!("  + {new}");
+        }
+    }
+    for (line, problem) in cnf::problems(&cnf::Cnf::parse(&new)) {
+        println!("warning: line {}: {problem}", line + 1);
+    }
+    if !options.yes {
+        print!(
+            "Save them? A copy of {} is made first. [y/N] ",
+            source.path().display()
+        );
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        let mut answer = String::new();
+        let _ = std::io::stdin().read_line(&mut answer);
+        if !matches!(answer.trim(), "y" | "Y" | "yes") {
+            println!("Not saved.");
+            return ExitCode::SUCCESS;
+        }
+    }
+    match config::save(&source, &original, &new) {
+        Ok(backup) => {
+            println!("Saved. The previous version is in {}", backup.display());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let options = match parse_args() {
         Ok(options) => options,
@@ -362,6 +500,7 @@ fn main() -> ExitCode {
         "list" => list(&options),
         "covers" => download_covers(&options),
         "rename" => rename_isos(&options),
+        "config" => show_config(&options),
         other => {
             eprintln!("error: unknown command: {other}\n\n{USAGE}");
             ExitCode::from(2)

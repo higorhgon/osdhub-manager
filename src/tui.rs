@@ -8,6 +8,7 @@
 //! is too long for OSDHub.
 
 use crate::browse;
+use crate::config_tab::ConfigTab;
 use crate::covers::{self, ArtType, Downloader, Outcome, Sources};
 use crate::games::{self, Console, Game, Layout};
 use crate::osdhub::Screen;
@@ -54,6 +55,13 @@ impl Filter {
     }
 }
 
+/// The tabs of the interface
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Tab {
+    Games,
+    Config,
+}
+
 /// Messages from the download thread
 enum Message {
     Log(String),
@@ -91,6 +99,11 @@ struct App {
     search: String,
     /// Whether the keys are typing the search
     searching: bool,
+    tab: Tab,
+    /// OSDMenu's configuration
+    config: ConfigTab,
+    /// Whether quitting was asked once with changes to the configuration not saved
+    quit_warned: bool,
     /// The name editor of the ISO being renamed
     editor: Option<Editor>,
     /// The games to rename after the one in the editor
@@ -177,6 +190,7 @@ impl App {
         screen: Screen,
     ) -> App {
         App {
+            config: ConfigTab::new(root.clone()),
             root,
             layout,
             sources,
@@ -193,6 +207,8 @@ impl App {
             screen,
             search: String::new(),
             searching: false,
+            tab: Tab::Games,
+            quit_warned: false,
             editor: None,
             rename_queue: VecDeque::new(),
             rename_count: (0, 0),
@@ -327,7 +343,50 @@ impl App {
         }
     }
 
+    /// Quits, unless the configuration has changes not saved, which is told once first
+    fn quit(&mut self) {
+        if self.config.modified() && !self.quit_warned {
+            self.quit_warned = true;
+            self.log(
+                "OSDMENU.CNF has changes not saved: s in the Config tab saves them, q again quits"
+                    .to_string(),
+            );
+        } else {
+            self.quit = true;
+        }
+    }
+
+    fn show_config(&mut self) {
+        self.tab = Tab::Config;
+        self.config.show();
+        self.take_config_log();
+    }
+
+    fn take_config_log(&mut self) {
+        for line in std::mem::take(&mut self.config.log) {
+            self.log(line);
+        }
+    }
+
     fn key(&mut self, code: KeyCode) {
+        if self.tab == Tab::Config {
+            if !self.config.typing() {
+                match code {
+                    KeyCode::Char('1') => {
+                        self.tab = Tab::Games;
+                        return;
+                    }
+                    KeyCode::Char('q') => {
+                        self.quit();
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+            self.config.key(code);
+            self.take_config_log();
+            return;
+        }
         if self.editor.is_some() {
             self.edit(code);
             return;
@@ -341,7 +400,8 @@ impl App {
             KeyCode::Char('/') => self.searching = true,
             // Esc clears the search first
             KeyCode::Esc if !self.search.is_empty() => self.set_search(String::new()),
-            KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
+            KeyCode::Char('q') | KeyCode::Esc => self.quit(),
+            KeyCode::Char('2') => self.show_config(),
             KeyCode::Down | KeyCode::Char('j') => self.move_by(1, rows),
             KeyCode::Up | KeyCode::Char('k') => self.move_by(-1, rows),
             KeyCode::PageDown => self.move_by(10, rows),
@@ -615,6 +675,12 @@ impl App {
         ])
         .areas(frame.area());
         self.draw_header(frame, header);
+        if self.tab == Tab::Config {
+            self.config.draw(frame, table);
+            self.draw_log(frame, log);
+            frame.render_widget(Paragraph::new(self.config.help()).dark_gray(), help);
+            return;
+        }
         if table.width >= PREVIEW_MIN_WIDTH && self.picker.is_some() {
             let [table, preview] =
                 Split::horizontal([Constraint::Fill(1), Constraint::Length(PREVIEW_WIDTH)])
@@ -627,7 +693,7 @@ impl App {
         self.draw_log(frame, log);
         frame.render_widget(
             Paragraph::new(
-                "↑↓ move  / search  Space select  a select all  Tab PS2/PS1  c download images  t covers/discs  f keep/replace  r rename  s rescan  q quit",
+                "↑↓ move  / search  Space select  a select all  Tab PS2/PS1  c download images  t covers/discs  f keep/replace  r rename  s rescan  2 Config  q quit",
             )
             .dark_gray(),
             help,
@@ -655,7 +721,26 @@ impl App {
         } else {
             Span::from("keep")
         };
+        let page = |label: &'static str, tab: Tab| {
+            if self.tab == tab {
+                Span::from(format!(" {label} ")).bold().reversed()
+            } else {
+                Span::from(format!(" {label} ")).dark_gray()
+            }
+        };
         let mut status = vec![
+            page("1 Games", Tab::Games),
+            page("2 Config", Tab::Config),
+            Span::from("  "),
+        ];
+        if self.tab == Tab::Config {
+            status.extend(self.config.status());
+            let block =
+                Block::bordered().title(format!(" osdhub-manager — {} ", self.root.display()));
+            frame.render_widget(Paragraph::new(Line::from(status)).block(block), area);
+            return;
+        }
+        status.extend([
             tab("All", Filter::All),
             tab("PS2", Filter::Ps2),
             tab("PS1", Filter::Ps1),
@@ -663,7 +748,7 @@ impl App {
             Span::from("   Images already in ART (f): "),
             existing,
             Span::from(format!("   Selected: {}", self.marked.len())),
-        ];
+        ]);
         if self.downloads.is_some() {
             status.push(
                 Span::from(format!(
@@ -1067,6 +1152,9 @@ mod tests {
             },
             search: String::new(),
             searching: false,
+            tab: Tab::Games,
+            config: ConfigTab::new(root_with_art()),
+            quit_warned: false,
             editor: None,
             rename_queue: VecDeque::new(),
             rename_count: (0, 0),

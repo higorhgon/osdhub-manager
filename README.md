@@ -8,6 +8,8 @@ device, a USB drive...), so OPL Manager (Windows only) isn't needed, from a term
   (`ART/SLUS_202.12_COV.jpg`), for OSDHub's game covers (`games_covers = 1`) and OPL
 - **rename** — renames the PS2 ISOs to OPL's `<title ID>.<name>.iso` form (`SLUS_202.12.BLOODY ROAR 3.iso`),
   which OPL needs to find the game's art, configuration and cheats
+- **config** — edits OSDMenu's configuration, `SYS-CONF/OSDMENU.CNF`, right inside the memory card image an MMCE
+  device boots from, or in a `.cnf` file
 
 It's a single executable without dependencies: download it from the
 [releases](https://github.com/higorhgon/osdhub-manager/releases) (Linux, Windows and macOS) and run it from a terminal.
@@ -63,6 +65,7 @@ one it supports when the interface opens; `--no-images` skips that and uses half
 | `f` | Whether the images already in `ART/` are kept or downloaded again and replaced (`Images already in ART`) |
 | `r` | Renames the game under the cursor, or the selected ones one after the other, in a name editor (below) |
 | `s` | Reads the games again |
+| `1` / `2` | The Games tab / the Config tab (below) |
 | `q` | Quits |
 
 ### Searching
@@ -99,6 +102,44 @@ bytes), that FAT and exFAT don't allow (`/ \ : * ? " < > |`), nor the name of an
 favorites and play counts of the games by their paths, so those of a renamed game start over; refresh the game lists
 in OSDHub after renaming.
 
+## Configuration
+
+The Config tab (`2`) edits OSDMenu's settings in `OSDMENU.CNF`. On an MMCE device, OSDMenu reads it from
+`mc0:/SYS-CONF/OSDMENU.CNF`, a file inside the memory card image the device boots from, so the tab looks for the
+memory card images in the `BOOT` folders under `MemoryCards` (`MemoryCards/BOOT/*.mcd`, `MemoryCards/PS2/BOOT/*.mcd`...)
+and opens the one with `OSDMENU.CNF`. When there's none or more than one, it lists them, with an option to open any
+memory card image (`.mcd`, `.ps2`, `.bin`) or `.cnf` file instead. A memory card without `OSDMENU.CNF` gets one
+(and its `SYS-CONF` folder) when saving.
+
+Every setting OSDMenu knows is listed by section, with what it does and its default (in parentheses when it isn't set),
+followed by the menu entries and the other settings in the file. Values OSDMenu wouldn't take are marked with `✗`,
+and a line that would make OSDMenu stop reading the rest of the file (a line that isn't `name = value` nor a comment)
+is reported.
+
+| Key | |
+| --- | --- |
+| `Enter` / `←` `→` | Toggles a 0/1 setting, goes through the values of a setting with a few (`games_cover_type`: `cov`, `ico`), or types the others |
+| `e` | Types the value |
+| `d` | Back to the default: the setting's line is commented out |
+| `s` | Shows the changes (`-` old line, `+` new line) and saves them after asking |
+| `u` | Undoes the changes not saved |
+| `x` / `i` | Exports the configuration to a file to edit it elsewhere / imports it back (then `s` shows the changes and saves them) |
+| `o` | Opens another memory card or file |
+
+The rest of the file is kept as it is: comments, the order of the lines, the menu entries and the settings it doesn't
+know. A setting is changed in its line, or in place of its commented-out line (`# games_covers = 0`), or added at the end.
+
+**Saving** never changes the memory card in place:
+
+1. The memory card image (or file) is copied to `<name>.bak-<UTC date>-<time>` next to it
+2. The new image is written next to it and moved over it
+3. The image is read again: every file and folder in it must be readable, without clusters shared between them, and
+   `OSDMENU.CNF` must be what was saved; otherwise the copy is put back
+
+The memory card images of MMCE devices are 8 MB images without ECC; the 8.25 MB images with ECC, like PCSX2's, are
+supported too, with the ECC of the pages written computed again. Edit the memory card with the SD card in a card reader,
+not while the PS2 is using it. Delete the `.bak-*` copies once the new configuration works.
+
 ## Commands
 
 ```
@@ -116,6 +157,14 @@ osdhub-manager covers /run/media/$USER/MMCE
 
 # Only the PS1 case covers, showing what would be downloaded first
 osdhub-manager covers /run/media/$USER/MMCE --ps1 --types cov --dry-run
+
+# Exports OSDMenu's configuration from the BOOT memory card, then saves it back after editing it
+osdhub-manager config /run/media/$USER/MMCE --export OSDMENU.CNF
+nvim OSDMENU.CNF
+osdhub-manager config /run/media/$USER/MMCE --import OSDMENU.CNF
+
+# The configuration in a given memory card image
+osdhub-manager config /run/media/$USER/MMCE/MemoryCards/BOOT/BootCard.mcd
 
 # Shows how the PS2 ISOs would be renamed (and the names that don't fit on OSDHub), then renames them
 osdhub-manager rename /run/media/$USER/MMCE
@@ -138,6 +187,8 @@ covers and picks up the new ISO paths.
 | `--no-images` | Draws the art previews with colored half blocks instead of asking the terminal for images |
 | `--menu-x N` | Center of OSDHub's menu (`OSDSYS_menu_x`, 400 by default), to find the names that don't fit |
 | `--no-covers` | OSDHub doesn't show covers (`games_covers = 0`), which leaves more room for the names |
+| `--export FILE` / `--import FILE` | Writes the configuration to a file / saves a file as the configuration, after showing the changes and asking (`config`) |
+| `--yes` | Doesn't ask before saving (`config --import`) |
 
 ## Games
 
