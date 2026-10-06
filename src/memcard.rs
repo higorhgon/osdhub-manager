@@ -94,7 +94,7 @@ impl Card {
         } else if image.len() == pages * (PAGE + SPARE) {
             let mut data = Vec::with_capacity(pages * PAGE);
             let mut spare = Vec::with_capacity(pages);
-            for page in image.chunks_exact(PAGE + SPARE) {
+            for page in image.as_chunks::<{ PAGE + SPARE }>().0 {
                 data.extend_from_slice(&page[..PAGE]);
                 spare.push(page[PAGE..].try_into().unwrap());
             }
@@ -132,12 +132,13 @@ impl Card {
             return self.data.clone();
         };
         let mut image = Vec::with_capacity(spare.len() * (PAGE + SPARE));
-        for (index, page) in self.data.chunks_exact(PAGE).enumerate() {
+        for (index, page) in self.data.as_chunks::<PAGE>().0.iter().enumerate() {
             image.extend_from_slice(page);
             if self.dirty.contains(&index) {
                 let mut new = [0u8; SPARE];
-                for (chunk, ecc) in page.chunks_exact(128).zip(new.chunks_exact_mut(3)) {
-                    ecc.copy_from_slice(&ecc_of(chunk));
+                let (eccs, _) = new.as_chunks_mut::<3>();
+                for (chunk, ecc) in page.as_chunks::<128>().0.iter().zip(eccs) {
+                    *ecc = ecc_of(chunk);
                 }
                 image.extend_from_slice(&new);
             } else {
@@ -650,9 +651,9 @@ pub mod tests {
             return data;
         }
         let mut image = Vec::new();
-        for page in data.chunks_exact(512) {
+        for page in data.as_chunks::<512>().0 {
             image.extend_from_slice(page);
-            for chunk in page.chunks_exact(128) {
+            for chunk in page.as_chunks::<128>().0 {
                 image.extend_from_slice(&ecc_of(chunk));
             }
             image.extend_from_slice(&[0; 4]);
@@ -696,8 +697,8 @@ pub mod tests {
 
             // The ECC of every page is right
             if ecc {
-                for page in image.chunks_exact(528) {
-                    for (i, chunk) in page[..512].chunks_exact(128).enumerate() {
+                for page in image.as_chunks::<528>().0 {
+                    for (i, chunk) in page[..512].as_chunks::<128>().0.iter().enumerate() {
                         assert_eq!(page[512 + i * 3..512 + i * 3 + 3], ecc_of(chunk));
                     }
                 }
