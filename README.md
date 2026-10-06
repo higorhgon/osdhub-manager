@@ -8,8 +8,8 @@ device, a USB drive...), so OPL Manager (Windows only) isn't needed, from a term
   (`ART/SLUS_202.12_COV.jpg`), for OSDHub's game covers (`games_covers = 1`) and OPL
 - **rename** — renames the PS2 ISOs to OPL's `<title ID>.<name>.iso` form (`SLUS_202.12.BLOODY ROAR 3.iso`),
   which OPL needs to find the game's art, configuration and cheats
-- **install** — installs OSDHub in the memory card image an MMCE device boots from, and RiptOPL, Neutrino and Ember
-  on the device, from their latest releases
+- **install** — installs OSDHub in the memory card image an MMCE device boots from (or in a folder to copy to a
+  memory card), and RiptOPL, Neutrino and Ember on the device, from their latest releases
 - **config** — edits OSDMenu's configuration, `SYS-CONF/OSDMENU.CNF`, right inside the memory card image an MMCE
   device boots from, or in a `.cnf` file
 
@@ -150,10 +150,16 @@ latest releases on GitHub:
 
 | | Where | From |
 | --- | --- | --- |
-| **OSDHub** (always) | `mc0:/BOOT/BOOT.ELF` in the BOOT memory card image, the ELF the boot loader starts | [higorhgon/osdmenu](https://github.com/higorhgon/osdmenu/releases)'s `osdmenu-*.zip` |
+| **OSDHub** (always) | `mc0:/BOOT/BOOT.ELF`, the ELF the boot loader starts, in the BOOT memory card image or in a folder (below) | [higorhgon/osdmenu](https://github.com/higorhgon/osdmenu/releases)'s `osdmenu-*.zip` |
 | **RiptOPL** | `APPS/OPL/RIPTOPL.ELF` | [higorhgon/Open-PS2-Loader](https://github.com/higorhgon/Open-PS2-Loader/releases)'s manual releases, with the MMCE/SMB argv autolaunch OSDHub uses (`games_launcher = opl`): the OFFICIALPINNED build, or PS2DEVPINNED-RA, the RetroAchievements one |
 | **Neutrino** | `APPS/neutrino/` | [rickgaiser/neutrino](https://github.com/rickgaiser/neutrino/releases)'s latest release (`.7z`) |
 | **Ember** | `EMBER/`, with `EMBER/games/` | [Ember](https://github.com/Gageformer/Ember/releases), a PS1 emulator by **Gageformer**, under its beta licence (installed next to it) |
+
+OSDHub goes in the BOOT memory card image of an MMCE device (`MemoryCards/**/BOOT/`) or, for a regular memory card, in
+a folder (`OSDHUB-MC` on the device by default) holding the `BOOT` and `SYS-CONF` folders to copy to the memory card,
+from a USB drive with wLaunchELF for example: `BOOT/BOOT.ELF` replaces the one on the memory card, and `SYS-CONF` can
+be left out to keep the memory card's own `OSDMENU.CNF`. A folder created on the memory card gets its icon for the
+PS2's Browser (OSDMenu's for `BOOT`, and the one KELFBinder installs for `SYS-CONF`), from OSDHub's sources.
 
 Everything is downloaded first, then the files that will be written are listed (marking the ones they replace), and
 they're only written after confirming. The memory card is written like the configuration is saved: copied first and
@@ -191,6 +197,9 @@ osdhub-manager config /run/media/$USER/MMCE --import OSDMENU.CNF
 # Installs OSDHub, RiptOPL (RetroAchievements build), Neutrino and Ember, with the BIOS for Ember
 osdhub-manager install /run/media/$USER/MMCE --opl-ra --neutrino --bios ~/scph1001.bin
 
+# On a USB drive: OSDHub in USB/OSDHUB-MC, to copy to a memory card, and Neutrino on the drive
+osdhub-manager install /run/media/$USER/USB --neutrino
+
 # The configuration in a given memory card image
 osdhub-manager config /run/media/$USER/MMCE/MemoryCards/BOOT/BootCard.mcd
 
@@ -220,6 +229,7 @@ covers and picks up the new ISO paths.
 | `--opl` / `--opl-ra` / `--neutrino` / `--ember` | What to install besides OSDHub (`install`); `--opl-ra` is RiptOPL's RetroAchievements build |
 | `--bios FILE` | PS1 BIOS for Ember, copied to `EMBER/bios.bin` (`install`) |
 | `--card FILE` | Memory card image to install OSDHub in (`install`; by default the only one in `MemoryCards/**/BOOT/`) |
+| `--folder DIR` | Folder to put OSDHub's `BOOT` and `SYS-CONF` in, to copy them to a memory card (`install`; by default `OSDHUB-MC` on the device when it has no BOOT memory card image) |
 
 ## Games
 

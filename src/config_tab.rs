@@ -4,6 +4,7 @@
 
 use crate::cnf::{self, Cnf, KEYS, Key, Kind};
 use crate::config::{self, FoundCard, Source};
+use crate::install::Target;
 use crate::install_modal::{self, InstallModal, Outcome};
 use crossterm::event::KeyCode;
 use ratatui::Frame;
@@ -228,17 +229,15 @@ impl ConfigTab {
         }
     }
 
-    /// Opens the installer for the memory card open, or the only BOOT memory card
+    /// Opens the installer for the memory card open, or the only BOOT memory card, or else a folder
     fn start_install(&mut self) {
         self.show();
         let open = match &self.source {
             Some(Source::Card(path)) => Some(path.as_path()),
             _ => None,
         };
-        match install_modal::card_for(open, self.cards.as_deref().unwrap_or_default()) {
-            Ok(card) => self.install = Some(InstallModal::new(self.root.clone(), card)),
-            Err(e) => self.error = Some(e),
-        }
+        let card = install_modal::card_for(open, self.cards.as_deref().unwrap_or_default());
+        self.install = Some(InstallModal::new(self.root.clone(), card));
     }
 
     pub fn key(&mut self, code: KeyCode) {
@@ -247,13 +246,18 @@ impl ConfigTab {
             match install.key(code) {
                 Outcome::Nothing => {}
                 Outcome::Closed => self.install = None,
-                Outcome::Installed { log, card } => {
+                Outcome::Installed { log, target } => {
                     self.log.extend(log);
                     self.install = None;
                     // The memory card changed: read it again, with its OSDMENU.CNF (the example, when it had none)
                     self.cards = Some(config::find_cards(&self.root));
                     if !self.modified() {
-                        self.open(Source::Card(card));
+                        let cnf = target.path().join(config::CNF_PATH);
+                        match target {
+                            Target::Card(card) => self.open(Source::Card(card)),
+                            Target::Folder(_) if cnf.is_file() => self.open(Source::File(cnf)),
+                            Target::Folder(_) => {}
+                        }
                     }
                 }
             }

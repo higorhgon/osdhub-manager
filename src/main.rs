@@ -35,8 +35,9 @@ COMMANDS:
     list      Lists the games with the title IDs read from their discs
     covers    Downloads the case covers and discs of the games into ART/ (<ID>_COV.jpg, <ID>_ICO.png...)
     rename    Renames the PS2 ISOs to OPL's <ID>.<name>.iso form (only shows the changes without --apply)
-    install   Installs OSDHub as mc0:/BOOT/BOOT.ELF in the device's BOOT memory card, and RiptOPL, Neutrino and
-              Ember on the device, from their latest releases, after showing what's written and asking
+    install   Installs OSDHub as mc0:/BOOT/BOOT.ELF in the device's BOOT memory card (or in a folder to copy to
+              a memory card), and RiptOPL, Neutrino and Ember on the device, from their latest releases, after
+              showing what's written and asking
     config    Shows OSDMenu's configuration (SYS-CONF/OSDMENU.CNF inside the device's BOOT memory card, or the
               memory card image or .cnf file given instead of the device root), exports it or imports it
 
@@ -62,6 +63,8 @@ OPTIONS:
     --ember             Installs Ember, a beta by Gageformer (install)
     --bios <FILE>       PS1 BIOS dumped from your console, copied to EMBER/bios.bin (install)
     --card <FILE>       Memory card image to install OSDHub in (install; default: the only BOOT one)
+    --folder <DIR>      Folder to put OSDHub's BOOT and SYS-CONF in, to copy them to a memory card (install;
+                        the default without a BOOT memory card image: OSDHUB-MC on the device)
     -h, --help          Shows this help
     -V, --version       Shows the version
 
@@ -93,6 +96,7 @@ struct Options {
     yes: bool,
     install: install::Choice,
     card: Option<PathBuf>,
+    folder: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Options, String> {
@@ -123,6 +127,7 @@ fn parse_args() -> Result<Options, String> {
         yes: false,
         install: install::Choice::default(),
         card: None,
+        folder: None,
     };
 
     while let Some(arg) = args.next() {
@@ -157,6 +162,7 @@ fn parse_args() -> Result<Options, String> {
                 options.install.bios = Some(PathBuf::from(value("--bios")?));
             }
             "--card" => options.card = Some(PathBuf::from(value("--card")?)),
+            "--folder" => options.folder = Some(PathBuf::from(value("--folder")?)),
             "--export" => options.export = Some(PathBuf::from(value("--export")?)),
             "--import" => options.import = Some(PathBuf::from(value("--import")?)),
             "--menu-x" => {
@@ -495,18 +501,23 @@ fn show_config(options: &Options) -> ExitCode {
 
 fn install_apps(options: &Options) -> ExitCode {
     let root = device_root(options);
-    let card = match &options.card {
-        Some(card) => Ok(card.clone()),
-        None => install_modal::card_for(None, &config::find_cards(root)),
+    let target = match (&options.folder, &options.card) {
+        (Some(folder), _) => install::Target::Folder(folder.clone()),
+        (None, Some(card)) => install::Target::Card(card.clone()),
+        (None, None) => match install_modal::card_for(None, &config::find_cards(root)) {
+            Some(card) => install::Target::Card(card),
+            None => {
+                let folder = root.join(install::FOLDER);
+                println!(
+                    "No BOOT memory card image in {}/MemoryCards: OSDHub goes in {}, to copy to a memory card",
+                    root.display(),
+                    folder.display()
+                );
+                install::Target::Folder(folder)
+            }
+        },
     };
-    let card = match card {
-        Ok(card) => card,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let plan = match install::prepare(root, &card, &options.install, &|line| println!("{line}")) {
+    let plan = match install::prepare(root, &target, &options.install, &|line| println!("{line}")) {
         Ok(plan) => plan,
         Err(e) => {
             eprintln!("error: {e}");
@@ -523,17 +534,22 @@ fn install_apps(options: &Options) -> ExitCode {
     }
     if plan.creates_cnf {
         println!(
-            "The memory card has no OSDMENU.CNF: it gets the example (edit it with the config command)"
+            "There's no OSDMENU.CNF there: it gets the example (edit it with the config command)"
         );
     }
     for note in &plan.notes {
         println!("warning: {note}");
     }
     if !options.yes {
-        print!(
-            "Install? A copy of {} is made first. [y/N] ",
-            card.display()
-        );
+        match &target {
+            install::Target::Card(card) => {
+                print!(
+                    "Install? A copy of {} is made first. [y/N] ",
+                    card.display()
+                )
+            }
+            install::Target::Folder(_) => print!("Install? [y/N] "),
+        }
         let _ = std::io::Write::flush(&mut std::io::stdout());
         let mut answer = String::new();
         let _ = std::io::stdin().read_line(&mut answer);

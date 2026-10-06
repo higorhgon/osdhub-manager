@@ -1,7 +1,8 @@
 //! Installs OSDHub and the programs it launches on a device, from their latest releases on GitHub:
 //!
 //! - **OSDHub** (always): `osdmenu.elf` from higorhgon/osdmenu's release package becomes `BOOT/BOOT.ELF` in the
-//!   memory card image the device boots from, which also gets the example `SYS-CONF/OSDMENU.CNF` when it has none
+//!   memory card image an MMCE device boots from, or in a folder to copy to a memory card (from a USB drive, with
+//!   wLaunchELF), which also gets the example `SYS-CONF/OSDMENU.CNF` and the `SYS-CONF` icons when it has none
 //! - **RiptOPL** with the MMCE/SMB argv autolaunch, from higorhgon/Open-PS2-Loader's manual releases (the
 //!   OFFICIALPINNED build, or the RetroAchievements one): `APPS/OPL/RIPTOPL.ELF`
 //! - **Neutrino**, from rickgaiser/neutrino's 7z: `APPS/neutrino/` (`neutrino.elf`, `modules/`, `config/`...)
@@ -29,6 +30,43 @@ pub const OPL_DIR: &str = "APPS/OPL";
 pub const NEUTRINO_DIR: &str = "APPS/neutrino";
 pub const EMBER_DIR: &str = "EMBER";
 
+/// Where OSDHub goes
+#[derive(Clone, PartialEq, Debug)]
+pub enum Target {
+    /// A memory card image, like the one an MMCE device boots from
+    Card(PathBuf),
+    /// A folder holding BOOT/ and SYS-CONF/, to copy to a memory card
+    Folder(PathBuf),
+}
+
+impl Default for Target {
+    fn default() -> Target {
+        Target::Folder(PathBuf::new())
+    }
+}
+
+impl Target {
+    pub fn path(&self) -> &Path {
+        match self {
+            Target::Card(path) | Target::Folder(path) => path,
+        }
+    }
+
+    /// Whether `file` (like `SYS-CONF/OSDMENU.CNF`) is there already
+    fn has(&self, file: &str) -> Result<bool, String> {
+        match self {
+            Target::Card(card) => {
+                let image = fs::read(card).map_err(|e| format!("{}: {e}", card.display()))?;
+                Ok(Card::open(&image)?.exists(file))
+            }
+            Target::Folder(folder) => Ok(on_device(folder, file).exists()),
+        }
+    }
+}
+
+/// The folder for a memory card, on the device, when there's no memory card image
+pub const FOLDER: &str = "OSDHUB-MC";
+
 /// What to install besides OSDHub
 #[derive(Clone, Default, Debug)]
 pub struct Choice {
@@ -44,8 +82,8 @@ pub struct Choice {
 /// The files to write, downloaded
 #[derive(Default, Debug)]
 pub struct Plan {
-    /// The memory card image OSDHub goes in
-    pub card: PathBuf,
+    /// Where OSDHub goes
+    pub target: Target,
     /// Files to write in the memory card
     pub card_files: Vec<(String, Vec<u8>)>,
     /// Files to write on the device, relative to its root
@@ -56,7 +94,7 @@ pub struct Plan {
     pub sources: Vec<String>,
     /// Things to know, like a missing BIOS
     pub notes: Vec<String>,
-    /// Whether the memory card gets the example OSDMENU.CNF
+    /// Whether the memory card (or folder) gets the example OSDMENU.CNF
     pub creates_cnf: bool,
 }
 
@@ -208,13 +246,13 @@ fn on_device(root: &Path, path: &str) -> PathBuf {
 /// Downloads what `choice` needs and plans where it goes, reporting each step with `progress`
 pub fn prepare(
     root: &Path,
-    card: &Path,
+    target: &Target,
     choice: &Choice,
     progress: &dyn Fn(String),
 ) -> Result<Plan, String> {
     let agent = agent();
     let mut plan = Plan {
-        card: card.to_path_buf(),
+        target: target.clone(),
         ..Plan::default()
     };
 
@@ -244,9 +282,7 @@ pub fn prepare(
         .find(|(name, _)| name.eq_ignore_ascii_case("osdmenu.elf"))
         .ok_or(format!("{} has no osdmenu.elf", asset.name))?;
     plan.card_files.push((BOOT_ELF.to_string(), elf.1.clone()));
-    let image = fs::read(card).map_err(|e| format!("{}: {e}", card.display()))?;
-    let has_cnf = Card::open(&image)?.exists(config::CNF_PATH);
-    if !has_cnf {
+    if !target.has(config::CNF_PATH)? {
         let example = files
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case("OSDMENU.CNF"))
@@ -254,6 +290,42 @@ pub fn prepare(
         plan.card_files
             .push((config::CNF_PATH.to_string(), example.1.clone()));
         plan.creates_cnf = true;
+    }
+    // The icons of the folders in the PS2's Browser, from the release's sources: SYS-CONF's as KELFBinder installs
+    // it, and OSDMenu's package icon for BOOT. A folder without one shows as corrupted data
+    let icons: [(&str, &str, &[&str]); 2] = [
+        (
+            "SYS-CONF",
+            "utils/res/kelfbinder/ASSETS/SYS-CONF",
+            &["icon.sys", "list.icn"],
+        ),
+        (
+            "BOOT",
+            "utils/res/psu",
+            &["icon.sys", "list.icn", "copy.icn", "del.icn"],
+        ),
+    ];
+    // OSDHUB_GITHUB_RAW points to another server, to test the installer
+    let raw = std::env::var("OSDHUB_GITHUB_RAW")
+        .unwrap_or_else(|_| "https://raw.githubusercontent.com".to_string());
+    for (folder, source, files) in icons {
+        if target.has(&format!("{folder}/icon.sys"))? {
+            continue;
+        }
+        // All of them or none: an icon.sys without its icons is worse than none
+        let downloaded: Result<Vec<(String, Vec<u8>)>, String> = files
+            .iter()
+            .map(|file| {
+                let url = format!("{raw}/{OSDHUB_REPO}/{}/{source}/{file}", release.tag);
+                download(&agent, &url).map(|contents| (format!("{folder}/{file}"), contents))
+            })
+            .collect();
+        match downloaded {
+            Ok(icons) => plan.card_files.extend(icons),
+            Err(e) => plan.notes.push(format!(
+                "{folder}'s icon wasn't downloaded, so the Browser shows it as corrupted data ({e})"
+            )),
+        }
     }
     plan.sources
         .push(format!("OSDHub {} ({OSDHUB_REPO})", release.tag));
@@ -411,18 +483,16 @@ pub fn prepare(
 impl Plan {
     /// The files to write, as (where, whether it replaces a file), for the confirmation
     pub fn describe(&self, root: &Path) -> Vec<(String, bool)> {
-        let image = fs::read(&self.card)
-            .ok()
-            .and_then(|image| Card::open(&image).ok());
         let mut lines: Vec<(String, bool)> = self
             .card_files
             .iter()
             .map(|(file, _)| {
-                let replaces = image.as_ref().is_some_and(|card| card.exists(file));
-                (
-                    format!("mc0:/{file} (in {})", self.card.display()),
-                    replaces,
-                )
+                let replaces = self.target.has(file).unwrap_or(false);
+                let place = match &self.target {
+                    Target::Card(card) => format!("mc0:/{file} (in {})", card.display()),
+                    Target::Folder(folder) => on_device(folder, file).display().to_string(),
+                };
+                (place, replaces)
             })
             .collect();
         lines.extend(
@@ -447,12 +517,31 @@ impl Plan {
             .iter()
             .map(|(f, c)| (f.as_str(), c.as_slice()))
             .collect();
-        let backup = config::write_card(&self.card, &files)?;
-        log.push(format!(
-            "Installed OSDHub in {} as mc0:/{BOOT_ELF}; the previous memory card is in {}",
-            self.card.display(),
-            backup.display()
-        ));
+        match &self.target {
+            Target::Card(card) => {
+                let backup = config::write_card(card, &files)?;
+                log.push(format!(
+                    "Installed OSDHub in {} as mc0:/{BOOT_ELF}; the previous memory card is in {}",
+                    card.display(),
+                    backup.display()
+                ));
+            }
+            Target::Folder(folder) => {
+                for (file, contents) in files {
+                    let path = on_device(folder, file);
+                    if let Some(parent) = path.parent() {
+                        fs::create_dir_all(parent)
+                            .map_err(|e| format!("{}: {e}", parent.display()))?;
+                    }
+                    fs::write(&path, contents).map_err(|e| format!("{}: {e}", path.display()))?;
+                }
+                log.push(format!(
+                    "OSDHub is in {}: copy its BOOT and SYS-CONF folders to mc0:/ (with wLaunchELF, for example); \
+                     BOOT.ELF replaces the one there, and skip SYS-CONF to keep the OSDMENU.CNF the memory card has",
+                    folder.display()
+                ));
+            }
+        }
         for (file, contents) in &self.files {
             let path = on_device(root, file);
             if let Some(parent) = path.parent() {
@@ -523,7 +612,7 @@ mod tests {
         let card = root.join("BootCard.mcd");
         fs::write(&card, card_image(b"OSDSYS_menu_x = 400\n", false)).unwrap();
         let plan = Plan {
-            card: card.clone(),
+            target: Target::Card(card.clone()),
             card_files: vec![(BOOT_ELF.to_string(), vec![1; 3000])],
             files: vec![("APPS/OPL/RIPTOPL.ELF".to_string(), b"opl".to_vec())],
             dirs: vec!["EMBER/games".to_string()],
@@ -543,6 +632,30 @@ mod tests {
         assert!(root.join("EMBER/games").is_dir());
         // Installing again replaces them
         assert!(plan.describe(&root)[0].1 && plan.describe(&root)[1].1);
+
+        // Or into a folder to copy to a memory card
+        let folder = root.join(FOLDER);
+        let plan = Plan {
+            target: Target::Folder(folder.clone()),
+            card_files: vec![
+                (BOOT_ELF.to_string(), vec![2; 10]),
+                (config::CNF_PATH.to_string(), b"x = 1\n".to_vec()),
+            ],
+            ..Plan::default()
+        };
+        let lines = plan.describe(&root);
+        assert_eq!(
+            lines[0],
+            (folder.join("BOOT/BOOT.ELF").display().to_string(), false)
+        );
+        let log = plan.apply(&root).unwrap();
+        assert!(log[0].contains("copy its BOOT and SYS-CONF folders"));
+        assert_eq!(fs::read(folder.join("BOOT/BOOT.ELF")).unwrap(), vec![2; 10]);
+        assert_eq!(
+            fs::read(folder.join("SYS-CONF/OSDMENU.CNF")).unwrap(),
+            b"x = 1\n"
+        );
+        assert!(plan.target.has(config::CNF_PATH).unwrap());
         fs::remove_dir_all(&root).unwrap();
     }
 }
