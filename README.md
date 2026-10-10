@@ -36,17 +36,18 @@ the folders that look like an OSDHub device (`OSDHub: CD DVD ART`):
 When the folder picked doesn't have the folders OSDHub uses (`ART`, `CD`, `DVD` and `EMBER/games`, or the ones given with
 `--cd-folder`/`--dvd-folder`), it offers to create them, which prepares a new SD card or USB drive for OSDHub.
 The games are shown in a table with their title ID, region, whether their case cover (`COV`) and disc (`ICO`) are in `ART/`,
-and whether the game should be renamed: the PS2 ISOs without OPL's name show `rename` (`folder` for ISOs in their own
+whether a PS2 game has a cheat file in `CHT/` (`WS`, see [Widescreen cheats](#widescreen-cheats)), and whether the game
+should be renamed: the PS2 ISOs without OPL's name show `rename` (`folder` for ISOs in their own
 subfolder, which OPL doesn't list), and the names that don't fit on OSDHub's menu show `⚠`, with the part OSDHub cuts
 in yellow:
 
 ```
 ┌ Games (4) ──────────────────────────────────────────────────────────────────┐
-│      Title ID    Region COV ICO Rename   Name                               │
-│● PS2 SLUS_202.12 USA    ✓   ✗   rename   Bloody Roar 3                      │
-│  PS2 SLUS_206.80 USA    ✓   ✓   ⚠        HARVEST MOON - SAVE THE HOMELAND   │
-│  PS2 SCUS_973.28 USA    ✓   ✓   ✓        Gran Turismo 4                     │
-│  PS1 SCUS_949.00 USA    ✗   ✗   ✓        Crash Bandicoot (USA)              │
+│      Title ID    Region COV ICO WS  Rename   Name                           │
+│● PS2 SLUS_202.12 USA    ✓   ✗   ✓   rename   Bloody Roar 3                  │
+│  PS2 SLUS_206.80 USA    ✓   ✓   -   ⚠        HARVEST MOON - SAVE THE HOMELA │
+│  PS2 SCUS_973.28 USA    ✓   ✓   ✓   ✓        Gran Turismo 4                 │
+│  PS1 SCUS_949.00 USA    ✗   ✗   -   ✓        Crash Bandicoot (USA)          │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -66,6 +67,7 @@ one it supports when the interface opens; `--no-images` skips that and uses half
 | `t` | What to download: covers and discs, covers only or discs only (`Download` in the header) |
 | `f` | Whether the images already in `ART/` are kept or downloaded again and replaced (`Images already in ART`) |
 | `r` | Renames the game under the cursor, or the selected ones one after the other, in a name editor (below) |
+| `w` | Downloads the widescreen cheats of the game under the cursor, or of the selected ones, into `CHT/` (below) |
 | `s` | Reads the games again |
 | `1` / `2` | The Games tab / the Config tab (below) |
 | `q` | Quits |
@@ -243,6 +245,18 @@ The title ID comes from the `SYSTEM.CNF` file on the disc (`BOOT2 = cdrom0:\SLUS
 `BOOT = cdrom:\SCUS_949.00;1` on PS1), read from the ISO or from the first track of the CUE/BIN, as the console does.
 Early PS1 discs without `SYSTEM.CNF` are named after their executable (`SLPS_000.01`). When the disc can't be read,
 an ID in the file or folder name is used.
+
+### Widescreen cheats
+
+`w` downloads OPL cheat files with widescreen hacks from
+[PS2-Widescreen/OPL-Widescreen-Cheats](https://github.com/PS2-Widescreen/OPL-Widescreen-Cheats) (over 3600 PS2 games)
+into `CHT/` at the device root, as `CHT/<title ID>.cht`, for the game under the cursor or, when games are selected,
+for the selected ones. PS1 games and games without a title ID are skipped, and the games the repository has no cheat
+for are listed in the log. When some of the games already have a cheat file in `CHT/`, the files are listed first and
+`Enter` overwrites them (any other cheats in them are lost) or `Esc` cancels.
+
+OPL (and RiptOPL) loads them for the games it launches when **Cheat Settings** has **Enable PS2RD Cheat Engine** on and
+**PS2RD Cheat Engine Mode** set to **Auto-select cheats**.
 
 ## Art sources
 

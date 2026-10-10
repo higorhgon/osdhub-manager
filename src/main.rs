@@ -2,6 +2,7 @@
 //! (the SD card of an MMCE device, a USB drive...), without OPL Manager.
 
 mod browse;
+mod cheats;
 mod cnf;
 mod config;
 mod config_tab;

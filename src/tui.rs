@@ -6,8 +6,11 @@
 //! The names that don't fit on OSDHub's menu are shown with the part it cuts in yellow, and renaming a game
 //! (a PS2 ISO, or a PS1 game folder, which is optional) opens an editor for its name, which warns when the name
 //! is too long for OSDHub.
+//! `w` downloads widescreen cheats for OPL into `CHT/`, for the selected games or the one under the cursor,
+//! asking first when it would replace cheat files already there.
 
 use crate::browse;
+use crate::cheats;
 use crate::config_tab::ConfigTab;
 use crate::covers::{self, ArtType, Downloader, Outcome, Sources};
 use crate::games::{self, Console, Game, Layout};
@@ -67,8 +70,11 @@ enum Message {
     Log(String),
     /// An image of a game was downloaded, as (game index, art type, file name)
     Art(usize, ArtType, String),
+    /// A widescreen cheat was written for a game
+    Cheat(usize),
     Progress(usize, usize),
-    Done,
+    /// The downloads ended, with the line to log
+    Done(String),
 }
 
 /// The art types to download, cycled with `t`
@@ -85,6 +91,10 @@ struct App {
     games: Vec<Game>,
     /// The COV and ICO images in ART/ for each game
     art: Vec<[Option<String>; 2]>,
+    /// Whether each game has a cheat file in CHT/
+    cheats: Vec<bool>,
+    /// The games whose widescreen cheats would replace files already in CHT/, waiting for a confirmation
+    cheat_confirm: Option<CheatConfirm>,
     filter: Filter,
     table: TableState,
     marked: BTreeSet<usize>,
@@ -117,6 +127,13 @@ struct App {
     picker: Option<Picker>,
     /// The COV and ICO images of the game being previewed
     preview: Option<(usize, [Preview; 2])>,
+}
+
+/// Widescreen cheats waiting for a confirmation, since some games already have a cheat file
+struct CheatConfirm {
+    games: Vec<usize>,
+    /// The cheat files that would be replaced
+    replaced: Vec<String>,
 }
 
 /// A previewed image
@@ -196,6 +213,8 @@ impl App {
             sources,
             games: Vec::new(),
             art: Vec::new(),
+            cheats: Vec::new(),
+            cheat_confirm: None,
             filter,
             table: TableState::default(),
             marked: BTreeSet::new(),
@@ -248,6 +267,17 @@ impl App {
                     covers::existing_art(&art_dir, id, ArtType::Ico),
                 ],
                 None => [None, None],
+            })
+            .collect();
+        let cheat_dir = cheats::cheat_dir(&self.root);
+        self.cheats = self
+            .games
+            .iter()
+            .map(|g| {
+                g.console == Console::Ps2
+                    && g.id
+                        .as_deref()
+                        .is_some_and(|id| cheats::existing(&cheat_dir, id).is_some())
             })
             .collect();
     }
@@ -332,13 +362,11 @@ impl App {
                         self.preview = None;
                     }
                 }
+                Message::Cheat(game) => self.cheats[game] = true,
                 Message::Progress(done, total) => self.progress = (done, total),
-                Message::Done => {
+                Message::Done(line) => {
                     self.downloads = None;
-                    self.log(
-                        "Done. Refresh the game lists in OSDHub to convert the new images."
-                            .to_string(),
-                    );
+                    self.log(line);
                 }
             }
         }
@@ -392,6 +420,16 @@ impl App {
             self.edit(code);
             return;
         }
+        if let Some(confirm) = self.cheat_confirm.take() {
+            match code {
+                KeyCode::Enter | KeyCode::Char('y') => self.download_cheats(confirm.games),
+                KeyCode::Esc | KeyCode::Char('n') => {
+                    self.log("Widescreen cheats cancelled".to_string())
+                }
+                _ => self.cheat_confirm = Some(confirm),
+            }
+            return;
+        }
         if self.searching {
             self.search_key(code);
             return;
@@ -437,6 +475,7 @@ impl App {
             KeyCode::Char('f') => self.force = !self.force,
             KeyCode::Char('c') => self.start_downloads(),
             KeyCode::Char('r') => self.start_renames(),
+            KeyCode::Char('w') => self.start_cheats(),
             KeyCode::Char('s') if self.downloads.is_none() => self.rescan(),
             _ => {}
         }
@@ -535,7 +574,104 @@ impl App {
                     let _ = tx.send(Message::Progress(done, total));
                 }
             }
-            let _ = tx.send(Message::Done);
+            let _ = tx.send(Message::Done(
+                "Done. Refresh the game lists in OSDHub to convert the new images.".to_string(),
+            ));
+        });
+    }
+
+    /// The widescreen cheats of the marked games, or of the selected one: asks first when some already have
+    /// a cheat file in CHT/, which would be replaced
+    fn start_cheats(&mut self) {
+        if self.downloads.is_some() {
+            self.log("A download is already running".to_string());
+            return;
+        }
+        let visible = self.visible();
+        let marked: Vec<usize> = visible
+            .iter()
+            .copied()
+            .filter(|i| self.marked.contains(i))
+            .collect();
+        let chosen = if marked.is_empty() {
+            self.selected().into_iter().collect()
+        } else {
+            marked
+        };
+        let (games, skipped): (Vec<usize>, Vec<usize>) = chosen
+            .into_iter()
+            .partition(|&i| self.games[i].console == Console::Ps2 && self.games[i].id.is_some());
+        if !skipped.is_empty() {
+            self.log(format!(
+                "Widescreen cheats are for PS2 games with a title ID: {} skipped",
+                skipped.len()
+            ));
+        }
+        if games.is_empty() {
+            self.log("No PS2 games to download widescreen cheats for".to_string());
+            return;
+        }
+        let cheat_dir = cheats::cheat_dir(&self.root);
+        let replaced: Vec<String> = games
+            .iter()
+            .filter_map(|&i| {
+                let path = cheats::existing(&cheat_dir, self.games[i].id.as_deref()?)?;
+                Some(rename::file_name(&path))
+            })
+            .collect();
+        if replaced.is_empty() {
+            self.download_cheats(games);
+        } else {
+            self.cheat_confirm = Some(CheatConfirm { games, replaced });
+        }
+    }
+
+    fn download_cheats(&mut self, games: Vec<usize>) {
+        let jobs: Vec<(usize, String, String)> = games
+            .into_iter()
+            .filter_map(|i| {
+                let game = &self.games[i];
+                Some((i, game.id.clone()?, game.name.clone()))
+            })
+            .collect();
+        let cheat_dir = cheats::cheat_dir(&self.root);
+        let (tx, rx) = mpsc::channel();
+        self.downloads = Some(rx);
+        self.progress = (0, jobs.len());
+        self.log(format!(
+            "Downloading widescreen cheats for {} game(s)...",
+            jobs.len()
+        ));
+
+        std::thread::spawn(move || {
+            let downloader = cheats::Downloader::new();
+            let total = jobs.len();
+            let (mut written, mut missing) = (0, 0);
+            for (done, (index, id, name)) in jobs.iter().enumerate() {
+                let line = match downloader.install(&cheat_dir, id) {
+                    cheats::Outcome::Written { file, replaced } => {
+                        written += 1;
+                        let _ = tx.send(Message::Cheat(*index));
+                        let what = if replaced { "replaced" } else { "written" };
+                        format!("{id} {name}: CHT/{file} {what}")
+                    }
+                    cheats::Outcome::NotAvailable => {
+                        missing += 1;
+                        format!("{id} {name}: no widescreen cheat available")
+                    }
+                    cheats::Outcome::Failed(e) => format!("{id} {name}: cheat failed: {e}"),
+                };
+                let _ = tx.send(Message::Log(line));
+                let _ = tx.send(Message::Progress(done + 1, total));
+            }
+            let mut line = format!("Widescreen cheats: {written} written");
+            if missing > 0 {
+                line.push_str(&format!(", {missing} not available"));
+            }
+            if written > 0 {
+                line.push_str(". In OPL, Cheat Settings: Enable PS2RD Cheat Engine On, mode Auto-select cheats.");
+            }
+            let _ = tx.send(Message::Done(line));
         });
     }
 
@@ -694,13 +830,16 @@ impl App {
         self.draw_log(frame, log);
         frame.render_widget(
             Paragraph::new(
-                "↑↓ move  / search  Space select  a select all  Tab PS2/PS1  c download images  t covers/discs  f keep/replace  r rename  s rescan  2 Config  q quit",
+                "↑↓ move  / search  Space select  a select all  Tab PS2/PS1  c download images  t covers/discs  f keep/replace  w widescreen cheats  r rename  s rescan  2 Config  q quit",
             )
             .dark_gray(),
             help,
         );
         if let Some(editor) = &self.editor {
             self.draw_editor(frame, editor);
+        }
+        if let Some(confirm) = &self.cheat_confirm {
+            draw_cheat_confirm(frame, confirm);
         }
     }
 
@@ -883,6 +1022,11 @@ impl App {
                     Cell::from(search::region(game).unwrap_or("-")),
                     art_cell(&self.art[i][0]),
                     art_cell(&self.art[i][1]),
+                    if self.cheats[i] {
+                        Cell::from("✓").green()
+                    } else {
+                        Cell::from("-").dark_gray()
+                    },
                     opl,
                     Cell::from(self.name_line(&game.name)),
                 ])
@@ -895,11 +1039,14 @@ impl App {
             Constraint::Length(6),
             Constraint::Length(3),
             Constraint::Length(3),
+            Constraint::Length(3),
             Constraint::Length(8),
             Constraint::Fill(1),
         ];
-        let header =
-            Row::new(["", "", "Title ID", "Region", "COV", "ICO", "Rename", "Name"]).bold();
+        let header = Row::new([
+            "", "", "Title ID", "Region", "COV", "ICO", "WS", "Rename", "Name",
+        ])
+        .bold();
         let mut block = Block::bordered().title(format!(" Games ({}) ", self.visible().len()));
         if self.searching || !self.search.is_empty() {
             let cursor = if self.searching { "█" } else { "" };
@@ -1053,6 +1200,52 @@ impl App {
     }
 }
 
+/// Asks before replacing the cheat files already in CHT/
+fn draw_cheat_confirm(frame: &mut Frame, confirm: &CheatConfirm) {
+    const LISTED: usize = 8;
+    let height = 7 + confirm.replaced.len().min(LISTED + 1) as u16;
+    let [area] = Split::vertical([Constraint::Length(height)])
+        .flex(Flex::Center)
+        .areas(frame.area());
+    let [area] = Split::horizontal([Constraint::Percentage(70)])
+        .flex(Flex::Center)
+        .areas(area);
+    let mut lines = vec![
+        Line::from(format!(
+            "{} of the {} game(s) already have a cheat file in CHT/, which will be overwritten:",
+            confirm.replaced.len(),
+            confirm.games.len()
+        ))
+        .yellow(),
+        Line::from(""),
+    ];
+    lines.extend(
+        confirm
+            .replaced
+            .iter()
+            .take(LISTED)
+            .map(|file| Line::from(format!("  CHT/{file}"))),
+    );
+    if confirm.replaced.len() > LISTED {
+        lines.push(Line::from(format!(
+            "  and {} more",
+            confirm.replaced.len() - LISTED
+        )));
+    }
+    lines.extend([
+        Line::from(""),
+        Line::from("Any other cheats in those files are lost.").dark_gray(),
+        Line::from("Enter overwrite   Esc cancel").bold(),
+    ]);
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(Block::bordered().title(" Widescreen cheats ")),
+        area,
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1084,6 +1277,8 @@ mod tests {
             image::RgbImage::from_pixel(64, 64, image::Rgb([30, 30, 200]))
                 .save(root.join("ART/SLUS_202.12_ICO.png"))
                 .unwrap();
+            std::fs::create_dir_all(root.join("CHT")).unwrap();
+            std::fs::write(root.join("CHT/SLUS_202.12.cht"), "\"Bloody Roar 3\"\r\n").unwrap();
             root
         })
         .clone()
@@ -1145,6 +1340,8 @@ mod tests {
             },
             games,
             art,
+            cheats: vec![true, false, false, false, false],
+            cheat_confirm: None,
             filter: Filter::All,
             table,
             marked: BTreeSet::new(),
@@ -1191,6 +1388,56 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         (text, buffer)
+    }
+
+    #[test]
+    fn widescreen_cheats_ask_before_overwriting() {
+        let mut app = app();
+        let (screen, _) = render(&mut app);
+        assert!(screen.contains("WS"));
+
+        // Bloody Roar 3, under the cursor, already has CHT/SLUS_202.12.cht
+        app.key(KeyCode::Char('w'));
+        let confirm = app.cheat_confirm.as_ref().expect("asks first");
+        assert_eq!(confirm.games, [0]);
+        assert_eq!(confirm.replaced, ["SLUS_202.12.cht"]);
+        assert!(app.downloads.is_none());
+        let (screen, _) = render(&mut app);
+        println!("{screen}");
+        assert!(screen.contains("will be overwritten"));
+        assert!(screen.contains("CHT/SLUS_202.12.cht"));
+
+        // Other keys keep asking, Esc cancels without downloading
+        app.key(KeyCode::Down);
+        assert!(app.cheat_confirm.is_some());
+        app.key(KeyCode::Esc);
+        assert!(app.cheat_confirm.is_none() && app.downloads.is_none());
+        assert_eq!(app.log.last().unwrap(), "Widescreen cheats cancelled");
+        assert_eq!(app.table.selected(), Some(0));
+
+        // With games selected, only those, and only the PS2 ones with an ID
+        app.marked.extend([0, 3, 4]);
+        app.key(KeyCode::Char('w'));
+        assert!(
+            app.log
+                .iter()
+                .any(|l| l == "Widescreen cheats are for PS2 games with a title ID: 2 skipped")
+        );
+        assert_eq!(app.cheat_confirm.as_ref().unwrap().games, [0]);
+        app.key(KeyCode::Char('n'));
+        assert!(app.cheat_confirm.is_none());
+    }
+
+    #[test]
+    fn widescreen_cheats_skip_ps1() {
+        let mut app = app();
+        app.table.select(Some(3)); // Crash Bandicoot, a PS1 game
+        app.key(KeyCode::Char('w'));
+        assert!(app.cheat_confirm.is_none() && app.downloads.is_none());
+        assert_eq!(
+            app.log.last().unwrap(),
+            "No PS2 games to download widescreen cheats for"
+        );
     }
 
     #[test]
